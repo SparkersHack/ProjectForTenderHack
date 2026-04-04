@@ -1,12 +1,13 @@
 import React from 'react';
 import { useStore } from '../../store/store';
-import { User as UserIcon, LogOut } from 'lucide-react';
+import { ShoppingCart, User as UserIcon, LogOut } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 
 const Layout = ({ children }: { children: React.ReactNode }) => {
-    const { user, logout } = useStore();
+    const { user, logout, cart } = useStore();
     const navigate = useNavigate();
     const location = useLocation();
+    const cartCount = cart?.totalItems ?? 0;
 
     const handleLogout = () => {
         logout();
@@ -23,10 +24,25 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                     </div>
 
                     <div className="flex items-center gap-6">
+                        {location.pathname !== '/login' && (
+                            <button
+                                onClick={() => navigate('/cart')}
+                                className="relative text-gray-600 hover:text-[#E03F3F] transition-colors"
+                                title="Корзина"
+                            >
+                                <ShoppingCart size={22} />
+                                {cartCount > 0 && (
+                                    <span className="absolute -right-2 -top-2 min-w-[20px] rounded-full bg-[#E03F3F] px-1 text-center text-xs font-bold text-white">
+                                        {cartCount}
+                                    </span>
+                                )}
+                            </button>
+                        )}
                         {user ? (
                             <div className="flex items-center gap-4">
                                 <div className="text-sm text-right hidden md:block">
-                                    <div className="font-semibold text-gray-900">ООО "Ромашка" / ИНН {user.inn}</div>
+                                    <div className="font-semibold text-gray-900">ИНН {user.inn}</div>
+                                    <div className="text-gray-500">{user.region || 'Регион не определён'}</div>
                                 </div>
                                 <div className="w-9 h-9 bg-gray-100 rounded-full flex items-center justify-center text-gray-600">
                                     <UserIcon size={18} />

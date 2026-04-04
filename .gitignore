@@ -10,8 +10,15 @@ __pycache__/
 *.pdf
 СТЕ_*.csv
 Контракты_*.csv
+datasets/raw/*.csv
+!datasets/raw/
+!datasets/raw/.gitkeep
 
 # Generated data artifacts
 data/processed/
+datasets/processed/
+!datasets/processed/
+!datasets/processed/.gitkeep
+frontend/dist/
+frontend/node_modules/
 reports/
-

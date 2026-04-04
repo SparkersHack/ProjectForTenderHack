@@ -815,12 +815,12 @@ def build_report(summary: dict, report_path: Path) -> None:
             "",
             "## Подготовленные артефакты",
             "",
-            "- `data/processed/ste_catalog_clean.csv`",
-            "- `data/processed/category_lookup.csv`",
-            "- `data/processed/customer_ste_stats.csv`",
-            "- `data/processed/customer_category_stats.csv`",
-            "- `data/processed/region_category_stats.csv`",
-            "- `data/processed/tenderhack_preprocessed.sqlite`",
+            "- `datasets/processed/ste_catalog_clean.csv`",
+            "- `datasets/processed/category_lookup.csv`",
+            "- `datasets/processed/customer_ste_stats.csv`",
+            "- `datasets/processed/customer_category_stats.csv`",
+            "- `datasets/processed/region_category_stats.csv`",
+            "- `datasets/processed/tenderhack_preprocessed.sqlite`",
             "- `reports/data_prep_eda_report.md`",
             "- `reports/data_prep_summary.json`",
         ]
@@ -834,17 +834,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Prepare Tender Hack datasets for search and personalization.")
     parser.add_argument(
         "--ste-path",
-        default="СТЕ_20260403.csv",
+        default="datasets/raw/ste_catalog.csv",
         help="Path to the raw STE catalog CSV.",
     )
     parser.add_argument(
         "--contracts-path",
-        default="Контракты_20260403.csv",
+        default="datasets/raw/contracts.csv",
         help="Path to the raw contracts CSV.",
     )
     parser.add_argument(
         "--output-dir",
-        default="data/processed",
+        default="datasets/processed",
         help="Directory for processed outputs.",
     )
     parser.add_argument(

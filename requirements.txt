@@ -1,0 +1,14 @@
+# Core API/runtime
+fastapi
+httpx
+redis
+uvicorn
+
+# Search and semantic retrieval
+fasttext-wheel
+numpy
+scikit-learn
+
+# Optional learning-to-rank runtime
+# Recommended runtime for training: Linux + Python 3.11/3.12.
+catboost>=1.2,<2.0 ; python_version < "3.13"

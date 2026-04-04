@@ -6,6 +6,12 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, Optional
 
+from tenderhack.dataset_layout import (
+    contracts_candidates,
+    raw_contract_candidates,
+    raw_ste_candidates,
+    ste_catalog_candidates,
+)
 from tenderhack.text import normalize_text, tokenize
 
 
@@ -36,10 +42,15 @@ REQUIRED_CONTRACT_COLUMNS = [
 ]
 
 STE_DATASET_CANDIDATES = [
+    Path("datasets/processed/ste_catalog_clean.csv"),
+    Path("datasets/processed/ste_catalog_search_ready.csv"),
     Path("data/processed/ste_catalog_clean.csv"),
     Path("data/processed/ste_catalog_search_ready.csv"),
 ]
 CONTRACT_DATASET_CANDIDATES = [
+    Path("datasets/processed/contracts_clean.csv"),
+    Path("datasets/processed/contracts_flat.csv"),
+    Path("datasets/processed/contracts.csv"),
     Path("data/processed/contracts_clean.csv"),
     Path("data/processed/contracts_flat.csv"),
     Path("data/processed/contracts.csv"),
@@ -197,10 +208,10 @@ class LoadedDatasets:
 
 def resolve_dataset_paths(project_root: Path | str = ".") -> DatasetPaths:
     root = Path(project_root)
-    ste_candidates = [root / path for path in STE_DATASET_CANDIDATES]
-    contract_candidates = [root / path for path in CONTRACT_DATASET_CANDIDATES]
-    ste_candidates.extend(sorted(root.glob("СТЕ_*.csv")))
-    contract_candidates.extend(sorted(root.glob("Контракты_*.csv")))
+    ste_candidates = ste_catalog_candidates(root)
+    contract_candidates = contracts_candidates(root)
+    ste_candidates.extend(raw_ste_candidates(root))
+    contract_candidates.extend(raw_contract_candidates(root))
 
     ste_path = next((path for path in ste_candidates if path.exists()), None)
     contracts_path = next((path for path in contract_candidates if path.exists()), None)
@@ -459,8 +470,8 @@ def write_data_contract_report(validation_summary: dict, report_path: Path | str
         "",
         "## Expected Inputs",
         "",
-        "- STE catalog: `data/processed/ste_catalog_clean.csv` or raw `СТЕ_*.csv`.",
-        "- Contracts: `data/processed/contracts_clean.csv` or raw `Контракты_*.csv`.",
+        "- STE catalog: `datasets/processed/ste_catalog_clean.csv` or `datasets/raw/ste_catalog.csv`.",
+        "- Contracts: `datasets/processed/contracts_clean.csv` or `datasets/raw/contracts.csv`.",
         "- Primary join key between contracts and STE catalog: `ste_id`.",
         "",
         "## Required STE Columns",
@@ -557,4 +568,3 @@ def write_data_contract_report(validation_summary: dict, report_path: Path | str
         )
 
     target.write_text("\n".join(lines) + "\n", encoding="utf-8")
-

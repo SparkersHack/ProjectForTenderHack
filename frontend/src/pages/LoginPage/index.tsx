@@ -16,9 +16,8 @@ const LoginPage = () => {
 
         setIsLoading(true);
         try {
-            // В реальном приложении здесь будет токен и реальный респонс
-            const fakeUser = await login(inn);
-            setUser(fakeUser);
+            const user = await login(inn);
+            setUser(user);
             navigate('/');
         } catch (error) {
             console.error("Login failed", error);

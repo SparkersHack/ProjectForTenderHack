@@ -8,11 +8,12 @@ from typing import Dict, Iterable, List, Optional
 
 from tenderhack.cache import CacheService
 from features.personalization_features import derive_item_kind
+from tenderhack.dataset_layout import resolve_preprocessed_db_path
 from tenderhack.personalization_model import PersonalizationPredictor
 from tenderhack.text import normalize_text, unique_preserve_order
 
 
-DEFAULT_PREPROCESSED_DB = Path("data/processed/tenderhack_preprocessed.sqlite")
+DEFAULT_PREPROCESSED_DB = resolve_preprocessed_db_path()
 DEFAULT_PERSONALIZATION_MODEL_PATH = Path("artifacts/personalization_model.cbm")
 
 
@@ -465,21 +466,21 @@ class PersonalizationRuntimeService:
         recent_category_dates = {
             str(key): list(values) for key, values in dict(profile.get("recent_category_dates", {})).items()
         }
-        synthetic_date = reference_date.isoformat()
+        session_event_date = reference_date.isoformat()
 
         if total_purchases == 0:
             total_purchases = len(categories)
 
         for category in categories:
             category_counts[category] = int(category_counts.get(category, 0)) + 1
-            last_category_purchase_dt[category] = synthetic_date
+            last_category_purchase_dt[category] = session_event_date
             recent_category_dates.setdefault(category, [])
-            recent_category_dates[category].insert(0, synthetic_date)
+            recent_category_dates[category].insert(0, session_event_date)
             recent_category_dates[category] = recent_category_dates[category][:10]
 
             item_kind = derive_item_kind("", category)
             item_kind_counts[item_kind] = int(item_kind_counts.get(item_kind, 0)) + 1
-            last_item_kind_purchase_dt[item_kind] = synthetic_date
+            last_item_kind_purchase_dt[item_kind] = session_event_date
 
         profile["total_purchases"] = total_purchases
         profile["category_counts"] = category_counts

@@ -12,7 +12,7 @@ try:
 except ImportError as exc:
     raise SystemExit(
         "fasttext не установлен. Установите зависимости:\n"
-        "python3 -m pip install --user -r requirements-semantic.txt"
+        "python3 -m pip install --user -r requirements.txt"
     ) from exc
 
 
@@ -95,9 +95,9 @@ def train_fasttext_model(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train fastText model for Tender Hack STE semantic search.")
-    parser.add_argument("--catalog-path", default="data/processed/ste_catalog_search_ready.csv")
-    parser.add_argument("--corpus-path", default="data/processed/tenderhack_fasttext_corpus.txt")
-    parser.add_argument("--model-path", default="data/processed/tenderhack_fasttext.bin")
+    parser.add_argument("--catalog-path", default="datasets/processed/ste_catalog_search_ready.csv")
+    parser.add_argument("--corpus-path", default="datasets/processed/tenderhack_fasttext_corpus.txt")
+    parser.add_argument("--model-path", default="datasets/processed/tenderhack_fasttext.bin")
     parser.add_argument("--model-type", choices=["skipgram", "cbow"], default="skipgram")
     parser.add_argument("--dim", type=int, default=100)
     parser.add_argument("--epoch", type=int, default=10)

@@ -12,14 +12,20 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from tenderhack.dataset_layout import (
+    resolve_fasttext_model_path,
+    resolve_preprocessed_db_path,
+    resolve_search_db_path,
+    resolve_synonyms_path,
+)
 from tenderhack.personalization import PersonalizationService
 from tenderhack.search import SearchService
 
 
-SEARCH_DB_PATH = PROJECT_ROOT / "data" / "processed" / "tenderhack_search.sqlite"
-PREPROCESSED_DB_PATH = PROJECT_ROOT / "data" / "processed" / "tenderhack_preprocessed.sqlite"
-SYNONYMS_PATH = PROJECT_ROOT / "data" / "reference" / "search_synonyms.json"
-FASTTEXT_MODEL_PATH = PROJECT_ROOT / "data" / "processed" / "tenderhack_fasttext.bin"
+SEARCH_DB_PATH = resolve_search_db_path(PROJECT_ROOT)
+PREPROCESSED_DB_PATH = resolve_preprocessed_db_path(PROJECT_ROOT)
+SYNONYMS_PATH = resolve_synonyms_path(PROJECT_ROOT)
+FASTTEXT_MODEL_PATH = resolve_fasttext_model_path(PROJECT_ROOT)
 
 
 def ensure_required_files() -> None:
@@ -33,8 +39,8 @@ def ensure_required_files() -> None:
             "Не найдены нужные файлы для поиска:\n"
             f"{missing_list}\n\n"
             "Сначала соберите данные:\n"
-            "python3 scripts/preprocess_data.py\n"
-            "python3 scripts/build_search_assets.py"
+            "python3 scripts/normalize_datasets.py\n"
+            "python3 scripts/bootstrap_local.py"
         )
 
 
@@ -52,6 +58,8 @@ def render_payload(payload: dict, query: str) -> None:
         print(f"SYNONYMS: {query_meta['applied_synonyms']}")
     if query_meta.get("applied_semantic_neighbors"):
         print(f"SEMANTIC: {query_meta['applied_semantic_neighbors']}")
+    if query_meta.get("entities"):
+        print(f"ENTITIES: {query_meta['entities']}")
 
     if not results:
         print("RESULTS: nothing found")
@@ -64,6 +72,8 @@ def render_payload(payload: dict, query: str) -> None:
         print(f"{index:02d}. {item['ste_id']} | {score}")
         print(f"    {item['clean_name']}")
         print(f"    category: {category}")
+        if item.get("retrieval_sources"):
+            print(f"    retrieval: {', '.join(item['retrieval_sources'])}")
         if item.get("explanation"):
             print(f"    explanation: {', '.join(item['explanation'])}")
 

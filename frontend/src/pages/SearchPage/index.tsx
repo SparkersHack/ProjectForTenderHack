@@ -45,11 +45,21 @@ const SearchPage = () => {
                 )}
 
                 {!isSearching && results.length > 0 && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
-                        {results.map((product) => (
-                            <ProductCard key={product.id} product={product} />
-                        ))}
-                    </div>
+                    <>
+                        <div className="mb-6 flex items-center justify-between text-sm text-gray-500">
+                            <div>Найдено позиций: <span className="font-semibold text-gray-900">{results.length}</span></div>
+                            {correctedQuery && (
+                                <div className="hidden md:block">
+                                    Исправленный запрос: <span className="font-semibold text-gray-900">{correctedQuery}</span>
+                                </div>
+                            )}
+                        </div>
+                        <div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                            {results.map((product) => (
+                                <ProductCard key={product.id} product={product} />
+                            ))}
+                        </div>
+                    </>
                 )}
             </div>
         </div>

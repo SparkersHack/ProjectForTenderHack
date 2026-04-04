@@ -6,10 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
+from .dataset_layout import resolve_preprocessed_db_path
 from .text import normalize_text, stem_tokens, tokenize
 
 
-DEFAULT_PREPROCESSED_DB = Path("data/processed/tenderhack_preprocessed.sqlite")
+DEFAULT_PREPROCESSED_DB = resolve_preprocessed_db_path()
 
 
 @dataclass

@@ -162,6 +162,20 @@ class SearchServiceTests(unittest.TestCase):
         self.assertTrue({"многофункциональное", "устройство"} & semantic_targets)
         self.assertGreater(payload["results"][0]["search_features"]["semantic_name_overlap"], 0.0)
 
+    def test_query_understanding_extracts_measurement_entities(self) -> None:
+        analysis = self.service.analyze_query("парацетомол 500 мг")
+        entity_values = {entity.normalized_value for entity in analysis.entities}
+        self.assertIn("500 мг", entity_values)
+        self.assertIn("500", analysis.entity_tokens)
+        self.assertIn("мг", analysis.entity_tokens)
+
+    def test_search_returns_retrieval_sources_for_debugging(self) -> None:
+        payload = self.service.search("флешка 16 гб", top_k=3)
+        top_result = payload["results"][0]
+        self.assertTrue(top_result["retrieval_sources"])
+        self.assertGreaterEqual(top_result["retrieval_features"]["source_count"], 1)
+        self.assertIn("expanded", top_result["retrieval_sources"])
+
 
 if __name__ == "__main__":
     unittest.main()

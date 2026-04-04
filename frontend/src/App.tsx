@@ -3,6 +3,8 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import LoginPage from './pages/LoginPage';
 import SearchPage from './pages/SearchPage';
 import Layout from './components/Layout';
+import ItemPage from './pages/ItemPage';
+import CartPage from './pages/CartPage';
 
 const App = () => {
     return (
@@ -11,7 +13,8 @@ const App = () => {
                 <Routes>
                     <Route path="/login" element={<LoginPage />} />
                     <Route path="/" element={<SearchPage />} />
-                    {/* Перенаправляем неизвестные маршруты на главную */}
+                    <Route path="/items/:itemId" element={<ItemPage />} />
+                    <Route path="/cart" element={<CartPage />} />
                     <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>
             </Layout>

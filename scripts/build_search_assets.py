@@ -465,11 +465,11 @@ def build_customer_region_lookup(contracts_path: Path, preprocessed_db_path: Pat
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build search and personalization assets.")
-    parser.add_argument("--catalog-path", default="data/processed/ste_catalog_search_ready.csv")
-    parser.add_argument("--contracts-path", default="Контракты_20260403.csv")
-    parser.add_argument("--search-db-path", default="data/processed/tenderhack_search.sqlite")
-    parser.add_argument("--preprocessed-db-path", default="data/processed/tenderhack_preprocessed.sqlite")
-    parser.add_argument("--customer-region-output", default="data/processed/customer_region_lookup.csv")
+    parser.add_argument("--catalog-path", default="datasets/processed/ste_catalog_search_ready.csv")
+    parser.add_argument("--contracts-path", default="datasets/raw/contracts.csv")
+    parser.add_argument("--search-db-path", default="datasets/processed/tenderhack_search.sqlite")
+    parser.add_argument("--preprocessed-db-path", default="datasets/processed/tenderhack_preprocessed.sqlite")
+    parser.add_argument("--customer-region-output", default="datasets/processed/customer_region_lookup.csv")
     parser.add_argument("--semantic-min-frequency", type=int, default=10)
     parser.add_argument("--semantic-neighbors-per-token", type=int, default=8)
     parser.add_argument("--semantic-only", action="store_true", help="Rebuild only semantic neighbors on an existing search DB.")

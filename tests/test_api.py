@@ -308,6 +308,15 @@ class ApiTests(unittest.TestCase):
         self.assertIsInstance(cached_payload, dict)
         self.assertEqual(cached_payload["inn"], "7701234567")
 
+    def test_health_returns_readiness_report(self) -> None:
+        response = self.client.get("/api/health")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["service"], "ready")
+        self.assertTrue(payload["assets"]["ready"])
+        self.assertTrue(payload["assets"]["required"]["search_db"]["exists"])
+
     def test_runtime_personalization_predictor_returns_reason_codes(self) -> None:
         search_service = SearchService(
             search_db_path=self.search_db_path,
@@ -452,6 +461,121 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(payload)
         self.assertIn("флеш накопитель", payload)
         self.assertNotIn("Флеш накопитель 16 ГБ USB 3.0", payload)
+
+    def test_session_event_persists_runtime_state(self) -> None:
+        response = self.client.post(
+            "/api/event",
+            json={
+                "userId": "user-session-1",
+                "eventType": "click",
+                "steId": "ste-1",
+                "category": "Ручки канцелярские",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("ste-1", payload["clickedSteIds"])
+        self.assertIn("ручки канцелярские", payload["recentCategories"])
+
+    def test_search_for_anonymous_user_changes_after_session_event(self) -> None:
+        before = self.client.post(
+            "/api/search",
+            json={
+                "query": "канцелярские ручки",
+                "userContext": {"id": "anon-1", "inn": None, "region": None, "viewedCategories": []},
+                "viewedCategories": [],
+                "bouncedCategories": [],
+                "topK": 5,
+            },
+        )
+        self.assertEqual(before.status_code, 200)
+        before_payload = before.json()
+        self.assertIsNone(before_payload["items"][0]["reasonToShow"])
+
+        event_response = self.client.post(
+            "/api/event",
+            json={
+                "userId": "anon-1",
+                "eventType": "click",
+                "steId": "ste-1",
+                "category": "Ручки канцелярские",
+            },
+        )
+        self.assertEqual(event_response.status_code, 200)
+
+        after = self.client.post(
+            "/api/search",
+            json={
+                "query": "канцелярские ручки",
+                "userContext": {"id": "anon-1", "inn": None, "region": None, "viewedCategories": []},
+                "viewedCategories": [],
+                "bouncedCategories": [],
+                "topK": 5,
+            },
+        )
+        self.assertEqual(after.status_code, 200)
+        after_payload = after.json()
+        self.assertEqual(after_payload["items"][0]["reasonToShow"], "На основе ваших закупок")
+
+    def test_item_endpoint_returns_catalog_details(self) -> None:
+        response = self.client.get("/api/items/ste-1")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["id"], "ste-1")
+        self.assertEqual(payload["supplierInn"], "1234567890")
+        self.assertGreaterEqual(payload["offerCount"], 1)
+        self.assertIn("Цвет", payload["attributeKeys"])
+
+    def test_offers_endpoint_returns_ranked_offers(self) -> None:
+        response = self.client.get(
+            "/api/items/ste-1/offers",
+            params={
+                "user_id": "user-7701234567",
+                "customer_inn": "7701234567",
+                "customer_region": "Москва",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["itemId"], "ste-1")
+        self.assertTrue(payload["offers"])
+        self.assertEqual(payload["offers"][0]["steId"], "ste-1")
+        self.assertGreater(payload["offers"][0]["offerScore"], 0.0)
+
+    def test_cart_and_procurement_flow(self) -> None:
+        add_response = self.client.post(
+            "/api/cart/add",
+            json={
+                "userId": "user-cart-1",
+                "steId": "ste-2",
+                "quantity": 2,
+            },
+        )
+        self.assertEqual(add_response.status_code, 200)
+        add_payload = add_response.json()
+        self.assertEqual(add_payload["userId"], "user-cart-1")
+        self.assertEqual(add_payload["totalItems"], 2)
+        self.assertEqual(add_payload["items"][0]["steId"], "ste-2")
+
+        cart_response = self.client.get("/api/cart", params={"user_id": "user-cart-1"})
+        self.assertEqual(cart_response.status_code, 200)
+        cart_payload = cart_response.json()
+        self.assertEqual(cart_payload["totalItems"], 2)
+        self.assertGreater(cart_payload["totalAmount"], 0.0)
+
+        procurement_response = self.client.post(
+            "/api/cart/create-procurement",
+            json={"userId": "user-cart-1", "procurementType": "direct_purchase"},
+        )
+        self.assertEqual(procurement_response.status_code, 200)
+        procurement_payload = procurement_response.json()
+        self.assertEqual(procurement_payload["procurementType"], "direct_purchase")
+        self.assertEqual(procurement_payload["status"], "created")
+        self.assertEqual(procurement_payload["itemCount"], 2)
+
+        empty_cart_response = self.client.get("/api/cart", params={"user_id": "user-cart-1"})
+        self.assertEqual(empty_cart_response.status_code, 200)
+        self.assertEqual(empty_cart_response.json()["totalItems"], 0)
 
 
 if __name__ == "__main__":

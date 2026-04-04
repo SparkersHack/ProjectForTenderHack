@@ -6,10 +6,11 @@ import sqlite3
 from pathlib import Path
 from typing import Dict, Iterable, List
 
+from .dataset_layout import resolve_fasttext_model_path
 from .text import normalize_text, normalize_tokens, unique_preserve_order
 
 
-DEFAULT_FASTTEXT_MODEL_PATH = Path("data/processed/tenderhack_fasttext.bin")
+DEFAULT_FASTTEXT_MODEL_PATH = resolve_fasttext_model_path()
 
 try:
     import fasttext as fasttext_module
