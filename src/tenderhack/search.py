@@ -14,6 +14,16 @@ DEFAULT_SEARCH_DB = Path("data/processed/tenderhack_search.sqlite")
 DEFAULT_SYNONYMS_PATH = Path("data/reference/search_synonyms.json")
 
 
+def _contains_token_phrase(tokens: List[str], phrase_tokens: List[str]) -> bool:
+    if not phrase_tokens or len(phrase_tokens) > len(tokens):
+        return False
+    window = len(phrase_tokens)
+    for index in range(len(tokens) - window + 1):
+        if tokens[index : index + window] == phrase_tokens:
+            return True
+    return False
+
+
 def _edit_distance(left: str, right: str, max_distance: int = 2) -> int:
     if left == right:
         return 0
@@ -173,13 +183,15 @@ class SearchService:
         }
 
     def _apply_synonyms(self, normalized_query: str, corrected_tokens: List[str]) -> tuple[List[str], List[Dict[str, List[str]]]]:
-        expanded: List[str] = list(corrected_tokens)
+        expanded: List[str] = []
         applied: List[Dict[str, List[str]]] = []
         phrase_synonyms = self.synonyms["phrase_synonyms"]
         token_synonyms = self.synonyms["token_synonyms"]
+        query_tokens = normalize_tokens(tokenize(normalized_query))
 
         for phrase, replacements in phrase_synonyms.items():
-            if phrase and phrase in normalized_query:
+            phrase_tokens = normalize_tokens(tokenize(phrase))
+            if phrase_tokens and _contains_token_phrase(query_tokens, phrase_tokens):
                 expanded.extend(replacements)
                 applied.append({"source": phrase, "targets": replacements})
 

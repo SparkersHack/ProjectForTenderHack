@@ -465,8 +465,8 @@ def build_customer_region_lookup(contracts_path: Path, preprocessed_db_path: Pat
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build search and personalization assets.")
-    parser.add_argument("--catalog-path", default="data/processed/ste_catalog_search_ready.csv")
-    parser.add_argument("--contracts-path", default="Контракты_20260403.csv")
+    parser.add_argument("--catalog-path", default="data/processed/ste_catalog_clean.csv")
+    parser.add_argument("--contracts-path", default="data/Контракты_20260403.csv")
     parser.add_argument("--search-db-path", default="data/processed/tenderhack_search.sqlite")
     parser.add_argument("--preprocessed-db-path", default="data/processed/tenderhack_preprocessed.sqlite")
     parser.add_argument("--customer-region-output", default="data/processed/customer_region_lookup.csv")

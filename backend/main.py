@@ -22,7 +22,30 @@ from tenderhack.offers import OfferLookupService
 from tenderhack.personalization import PersonalizationService
 from tenderhack.personalization_runtime import PersonalizationRuntimeService
 from tenderhack.search import SearchService
+from tenderhack.search_rerank_model import SearchRerankPredictor
 from tenderhack.text import normalize_text, unique_preserve_order
+
+
+def _discover_search_rerank_model_path(project_root: Path) -> Path:
+    candidates = [
+        project_root / "data" / "processed" / "tenderhack_yeti_ranker.cbm",
+        project_root / "data" / "processed" / "tenderhack_yeti_ranker_small.cbm",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def _discover_search_rerank_metadata_path(project_root: Path) -> Path:
+    candidates = [
+        project_root / "data" / "processed" / "tenderhack_yeti_ranker.json",
+        project_root / "data" / "processed" / "tenderhack_yeti_ranker_small.json",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
 
 
 @dataclass
@@ -32,6 +55,8 @@ class AppSettings:
     synonyms_path: Path = PROJECT_ROOT / "data" / "reference" / "search_synonyms.json"
     fasttext_model_path: Path = PROJECT_ROOT / "data" / "processed" / "tenderhack_fasttext.bin"
     personalization_model_path: Path = PROJECT_ROOT / "artifacts" / "personalization_model.cbm"
+    search_rerank_model_path: Path = _discover_search_rerank_model_path(PROJECT_ROOT)
+    search_rerank_metadata_path: Path = _discover_search_rerank_metadata_path(PROJECT_ROOT)
     semantic_backend: str = "auto"
 
     @classmethod
@@ -43,6 +68,12 @@ class AppSettings:
             fasttext_model_path=Path(os.getenv("TENDERHACK_FASTTEXT_MODEL_PATH", cls.fasttext_model_path)),
             personalization_model_path=Path(
                 os.getenv("TENDERHACK_PERSONALIZATION_MODEL_PATH", cls.personalization_model_path)
+            ),
+            search_rerank_model_path=Path(
+                os.getenv("TENDERHACK_SEARCH_RERANK_MODEL_PATH", cls.search_rerank_model_path)
+            ),
+            search_rerank_metadata_path=Path(
+                os.getenv("TENDERHACK_SEARCH_RERANK_METADATA_PATH", cls.search_rerank_metadata_path)
             ),
             semantic_backend=os.getenv("TENDERHACK_SEMANTIC_BACKEND", cls.semantic_backend),
         )
@@ -105,6 +136,10 @@ class TenderHackApiService:
             model_path=settings.personalization_model_path,
         )
         self.offer_lookup_service = OfferLookupService(db_path=settings.preprocessed_db_path)
+        self.search_rerank_predictor = SearchRerankPredictor(
+            model_path=settings.search_rerank_model_path,
+            metadata_path=settings.search_rerank_metadata_path,
+        )
 
     def close(self) -> None:
         self.search_service.close()
@@ -137,6 +172,12 @@ class TenderHackApiService:
     def search(self, payload: SearchRequest) -> SearchResponsePayload:
         raw_payload = self.search_service.search(query=payload.query, top_k=max(payload.topK * 5, 60))
         results = list(raw_payload["results"])
+        if self.search_rerank_predictor.enabled:
+            results = self.search_rerank_predictor.rerank_candidates(
+                query=payload.query,
+                query_meta=dict(raw_payload["query"]),
+                candidates=results,
+            )
 
         user_context = payload.userContext or SearchUserContext()
         session_categories = unique_preserve_order(payload.viewedCategories + user_context.viewedCategories)

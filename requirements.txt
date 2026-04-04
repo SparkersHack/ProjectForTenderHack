@@ -1,0 +1,8 @@
+numpy
+scikit-learn
+
+catboost
+
+fastapi
+uvicorn
+httpx

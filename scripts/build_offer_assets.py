@@ -17,7 +17,7 @@ from tenderhack.offers import build_offer_lookup_table
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build STE offer lookup table from raw contracts.")
-    parser.add_argument("--contracts-path", default="Контракты_20260403.csv")
+    parser.add_argument("--contracts-path", default="data/Контракты_20260403.csv")
     parser.add_argument("--preprocessed-db-path", default="data/processed/tenderhack_preprocessed.sqlite")
     args = parser.parse_args()
 

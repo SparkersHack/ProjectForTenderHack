@@ -418,12 +418,17 @@ def process_ste_catalog(
 
         for row_index, row in enumerate(reader, start=1):
             stats["rows_total"] += 1
-            if len(row) != len(STE_COLUMNS):
+            if len(row) < len(STE_COLUMNS):
                 stats["rows_invalid"] += 1
                 continue
 
             stats["rows_valid"] += 1
-            ste_id, raw_name, raw_category, raw_attributes = row
+            ste_id = row[0]
+            raw_name = row[1]
+            raw_category = row[2]
+            # Some STE exports contain thousands of trailing empty columns and,
+            # in a few rows, attribute chunks may spill past the 4th column.
+            raw_attributes = ";".join(part for part in row[3:] if part.strip())
             ste_id = clean_text(ste_id)
             raw_name = clean_text(raw_name)
             raw_category = clean_text(raw_category)
@@ -834,12 +839,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Prepare Tender Hack datasets for search and personalization.")
     parser.add_argument(
         "--ste-path",
-        default="СТЕ_20260403.csv",
+        default="data/СТЕ_20260403.csv",
         help="Path to the raw STE catalog CSV.",
     )
     parser.add_argument(
         "--contracts-path",
-        default="Контракты_20260403.csv",
+        default="data/Контракты_20260403.csv",
         help="Path to the raw contracts CSV.",
     )
     parser.add_argument(
