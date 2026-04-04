@@ -182,11 +182,14 @@ const SearchBar = () => {
                                 e.preventDefault();
                                 handleSuggestionClick(suggestion);
                             }}
+                            title={suggestion.text}
                             className="px-6 py-3 cursor-pointer hover:bg-[#f4f6f8] flex items-start gap-3 text-[18px] text-gray-800 transition-colors"
                         >
                             <Search size={18} className="text-gray-400 mt-1 flex-shrink-0" />
                             <div className="min-w-0 flex-1">
-                                <div className="text-[18px] leading-6 text-gray-900">{suggestion.text}</div>
+                                <div className="text-[18px] leading-6 text-gray-900 whitespace-normal break-words">
+                                    {suggestion.text}
+                                </div>
                                 {(suggestion.reason || suggestion.type) && (
                                     <div className="mt-1 flex items-center gap-2 text-[12px] uppercase tracking-[0.08em] text-[#8a919e]">
                                         <span className="inline-flex rounded-full bg-[#eef1f5] px-2 py-0.5 text-[11px] font-medium text-[#5f6775]">

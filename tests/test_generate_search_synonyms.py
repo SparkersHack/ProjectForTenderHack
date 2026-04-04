@@ -67,6 +67,66 @@ class SearchSynonymGeneratorTests(unittest.TestCase):
                     "мфу многофункциональное устройство принтер сканер копир",
                 ]
             )
+            writer.writerow(
+                [
+                    "ste-sand",
+                    "Аппарат абразивоструйный",
+                    "аппарат абразивоструйный",
+                    "Аппараты абразивоструйные (пескоструйные)",
+                    "аппараты абразивоструйные пескоструйные",
+                    "Тип",
+                    "1",
+                    "аппарат абразивоструйный пескоструйный",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-reagent",
+                    "Кислота борная реактив",
+                    "кислота борная реактив",
+                    "Химические реактивы",
+                    "химические реактивы",
+                    "Тип",
+                    "1",
+                    "кислота борная реактив",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-chair",
+                    "Стул офисный",
+                    "стул офисный",
+                    "Кресла и стулья",
+                    "кресла и стулья",
+                    "Материал",
+                    "1",
+                    "стул кресло офисный",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-software",
+                    "Программное обеспечение антивирусное",
+                    "программное обеспечение антивирусное",
+                    "Программное обеспечение",
+                    "программное обеспечение",
+                    "Тип лицензии",
+                    "1",
+                    "программное обеспечение софт software",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-iron",
+                    "Железо",
+                    "железо",
+                    "Железо (III)",
+                    "железо iii",
+                    "Форма",
+                    "1",
+                    "железо iii",
+                ]
+            )
 
         build_search_db(
             cls.catalog_path,
@@ -87,12 +147,24 @@ class SearchSynonymGeneratorTests(unittest.TestCase):
     def test_generator_keeps_user_phone_synonyms(self) -> None:
         payload = self._write_generated_synonyms()
         phone_targets = payload["token_synonyms"].get("мобильник", [])
-        self.assertIn("телефон", phone_targets)
+        self.assertIn("мобильный телефон", phone_targets)
 
     def test_generator_extracts_parenthetical_alias(self) -> None:
         payload = self._write_generated_synonyms()
         mfu_targets = payload["token_synonyms"].get("мфу", [])
         self.assertIn("многофункциональное устройство", mfu_targets)
+
+    def test_generator_rejects_adjectival_parenthetical_alias(self) -> None:
+        payload = self._write_generated_synonyms()
+        self.assertNotIn("пескоструйные", payload["token_synonyms"])
+        self.assertNotIn("пескоструйные", payload["phrase_synonyms"])
+
+    def test_generator_does_not_emit_generic_or_ambiguous_relations(self) -> None:
+        payload = self._write_generated_synonyms()
+        self.assertNotIn("реактив", payload["token_synonyms"])
+        self.assertNotIn("по", payload["token_synonyms"])
+        self.assertNotIn("кресло", payload["token_synonyms"].get("стул", []))
+        self.assertNotIn("iii", payload["token_synonyms"])
 
     def test_generated_synonyms_help_search_runtime(self) -> None:
         self._write_generated_synonyms()

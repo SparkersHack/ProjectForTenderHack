@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import itertools
 import json
 import re
 import sys
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -18,7 +19,7 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from tenderhack.text import STOPWORDS, normalize_text, tokenize, unique_preserve_order
+from tenderhack.text import STOPWORDS, normalize_text, stem_tokens, tokenize, unique_preserve_order
 
 
 DEFAULT_OUTPUT_PATH = PROJECT_ROOT / "data" / "reference" / "search_synonyms.json"
@@ -49,129 +50,114 @@ BAD_ALIAS_TOKENS = {
     "комплект",
 }
 
-# Доменные группы: пользовательские слова + короткие формы + канонические формы,
-# которые реально встречаются в закупочном каталоге.
-CONCEPT_GROUPS: list[list[str]] = [
-    ["телефон", "мобильный телефон", "сотовый телефон", "телефон сотовой связи", "мобильник", "сотовый", "смартфон"],
-    ["ноутбук", "ноут", "лэптоп", "laptop"],
-    ["компьютер", "пк", "персональный компьютер", "системный блок", "системник"],
-    ["монитор", "дисплей", "экран"],
-    ["клавиатура", "клава"],
-    ["мышь", "мышка", "манипулятор мышь"],
-    ["наушники", "гарнитура", "headset"],
-    ["микрофон", "microphone"],
-    ["веб камера", "вебкамера", "web camera"],
-    ["принтер", "печатающее устройство", "печатающий аппарат"],
-    ["мфу", "многофункциональное устройство", "принтер сканер копир", "сканер принтер копир", "сканер копир принтер"],
-    ["сканер", "scanner"],
-    ["картридж", "расходник", "расходные материалы для принтера", "тонер картридж"],
-    ["тонер", "тонер картридж", "картридж"],
-    ["флешка", "флеш накопитель", "usb накопитель", "usb флешка", "флеш драйв", "флешдрайв", "накопитель"],
-    ["жесткий диск", "hdd", "винчестер"],
-    ["ssd", "твердотельный накопитель"],
-    ["роутер", "маршрутизатор", "router"],
-    ["модем", "modem"],
-    ["коммутатор", "switch", "сетевой коммутатор"],
-    ["источник бесперебойного питания", "ибп", "бесперебойник"],
-    ["проектор", "projector"],
-    ["сервер", "server"],
-    ["программное обеспечение", "по", "софт", "software"],
-    ["лицензия", "license", "подписка"],
-    ["антивирус", "защитное по"],
-    ["электронная подпись", "эцп", "кэп", "квалифицированная электронная подпись"],
-    ["электронный документооборот", "эдо", "доступ к электронному документообороту"],
-    ["телефония", "связь", "телефонная связь"],
-    ["видеонаблюдение", "cctv", "камера видеонаблюдения", "видеокамера"],
-    ["камера", "видеокамера", "камера наблюдения"],
-    ["аккумулятор", "акб", "батарея"],
-    ["батарейка", "батарейки", "элемент питания", "элементы питания"],
-    ["светильник", "лампа", "осветительный прибор"],
-    ["светодиодный", "led"],
-    ["кабель", "провод", "шнур"],
-    ["удлинитель", "сетевой фильтр"],
-    ["бумага", "бумага офисная", "офисная бумага"],
-    ["ручка", "ручка канцелярская", "канц ручка", "шариковая ручка"],
-    ["карандаш", "карандаш простой"],
-    ["маркер", "фломастер", "маркер канцелярский"],
-    ["папка", "скоросшиватель", "папка пластиковая"],
-    ["файл", "мультифора"],
-    ["тетрадь", "тетрадка"],
-    ["степлер", "скобосшиватель"],
-    ["ластик", "стерка", "стирательная резинка"],
-    ["клей", "клей канцелярский", "клей карандаш"],
-    ["учебник", "учебная литература", "учебное пособие"],
-    ["обучение", "курсы", "образовательные услуги"],
-    ["повышение квалификации", "повышение профессиональной квалификации", "курсы повышения квалификации"],
-    ["уборка", "клининг", "клининговые услуги"],
-    ["охрана", "охранные услуги", "security"],
-    ["вывоз мусора", "утилизация отходов"],
-    ["лекарство", "препарат", "медикамент", "лекарственный препарат"],
-    ["обезболивающее", "анальгетик", "анальгетики"],
-    ["жаропонижающее", "антипиретик", "антипиретики"],
-    ["антибиотик", "антибактериальный препарат"],
-    ["антисептик", "дезинфицирующее средство", "дезсредство"],
-    ["шприц", "syringe"],
-    ["маска", "маска медицинская"],
-    ["перчатки", "одноразовые перчатки"],
-    ["бахилы", "одноразовые бахилы"],
-    ["капельница", "инфузия", "инфузионная система"],
-    ["укол", "инъекция"],
-    ["таблетка", "таблетки", "табл"],
-    ["капсула", "капсулы", "капс"],
-    ["ампула", "ампулы", "амп"],
-    ["флакон", "флаконы", "фл"],
-    ["раствор", "р р", "раствор для инъекций", "раствор для инфузий"],
-    ["суспензия", "сусп"],
-    ["мазь", "ointment"],
-    ["крем", "cream"],
-    ["гель", "gel"],
-    ["внутривенно", "в в", "вв"],
-    ["внутримышечно", "в м", "вм"],
-    ["подкожно", "п к", "пк"],
-    ["автомобиль", "авто", "машина", "транспортное средство"],
-    ["бензин", "топливо"],
-    ["дизельное топливо", "дизтопливо", "дт"],
-    ["шина", "покрышка"],
-    ["кондиционер", "сплит система", "сплитсистема"],
-    ["обогреватель", "нагреватель"],
-    ["вентилятор", "fan"],
-    ["насос", "pump"],
-    ["фильтр", "filter"],
-    ["смеситель", "кран"],
-    ["раковина", "умывальник"],
-    ["унитаз", "санфаянс"],
-    ["сантехника", "санитарно техническое оборудование"],
-    ["дрель", "drill"],
-    ["перфоратор", "rotary hammer"],
-    ["болгарка", "ушм", "углошлифовальная машина"],
-    ["шуруповерт", "винтоверт"],
-    ["саморез", "шуруп"],
-    ["болт", "bolt"],
-    ["гайка", "nut"],
-    ["краска", "лакокрасочные материалы", "лкм"],
-    ["грунтовка", "primer"],
-    ["труба", "трубопровод"],
-    ["дверь", "door"],
-    ["окно", "window"],
-    ["стол", "рабочий стол"],
-    ["стул", "кресло"],
-    ["шкаф", "шкафчик"],
-    ["диван", "sofa"],
-    ["мебель", "предметы мебели"],
-    ["холодильник", "холодильное оборудование"],
-    ["мл", "миллилитр", "миллилитров"],
-    ["мг", "миллиграмм", "миллиграммов"],
-    ["г", "грамм", "граммов"],
-    ["кг", "килограмм", "килограммов"],
-    ["мм", "миллиметр", "миллиметров"],
-    ["см", "сантиметр", "сантиметров"],
-    ["м", "метр", "метров"],
-    ["л", "литр", "литров"],
-    ["гб", "гигабайт", "гигабайтов"],
-    ["мб", "мегабайт", "мегабайтов"],
-    ["тб", "терабайт", "терабайтов"],
-    ["вт", "ватт", "ваттов"],
-]
+# Синонимы в этом проекте используются как additive query expansion. Поэтому
+# здесь допустимы только очень точные alias -> canonical связи:
+# аббревиатуры, общепринятый жаргон и устойчивые технические варианты записи.
+# Нельзя смешивать синонимы с гиперонимами, смежными товарами, атрибутами или
+# просто "похожими" словами: это резко ухудшает precision.
+MANUAL_TOKEN_SYNONYMS: dict[str, tuple[str, ...]] = {
+    # IT / office hardware
+    "мобильник": ("мобильный телефон",),
+    "сотовый": ("мобильный телефон",),
+    "смартфон": ("мобильный телефон",),
+    "ноут": ("ноутбук",),
+    "лэптоп": ("ноутбук",),
+    "laptop": ("ноутбук",),
+    "пк": ("персональный компьютер",),
+    "системник": ("системный блок",),
+    "дисплей": ("монитор",),
+    "клава": ("клавиатура",),
+    "мышка": ("мышь",),
+    "вебкамера": ("веб камера",),
+    "мфу": ("многофункциональное устройство",),
+    "флешка": ("флеш накопитель", "usb накопитель"),
+    "флешдрайв": ("флеш накопитель", "usb накопитель"),
+    "hdd": ("жесткий диск",),
+    "ssd": ("твердотельный накопитель",),
+    "роутер": ("маршрутизатор",),
+    "router": ("маршрутизатор",),
+    "switch": ("коммутатор",),
+    "ибп": ("источник бесперебойного питания",),
+    "бесперебойник": ("источник бесперебойного питания",),
+    "софт": ("программное обеспечение",),
+    "software": ("программное обеспечение",),
+    "эцп": ("электронная подпись", "квалифицированная электронная подпись"),
+    "кэп": ("квалифицированная электронная подпись", "электронная подпись"),
+    "эдо": ("электронный документооборот",),
+    "cctv": ("видеонаблюдение",),
+    "акб": ("аккумулятор",),
+    "led": ("светодиодный",),
+    # Office supplies / services
+    "мультифора": ("файл",),
+    "тетрадка": ("тетрадь",),
+    "скобосшиватель": ("степлер",),
+    "стерка": ("ластик",),
+    "клининг": ("уборка",),
+    # Medicine / pharma
+    "лекарство": ("лекарственный препарат",),
+    "медикамент": ("лекарственный препарат",),
+    "анальгетик": ("обезболивающее",),
+    "анальгетики": ("обезболивающее",),
+    "антипиретик": ("жаропонижающее",),
+    "антипиретики": ("жаропонижающее",),
+    "антибиотик": ("антибактериальный препарат",),
+    "дезсредство": ("дезинфицирующее средство",),
+    "антисептик": ("дезинфицирующее средство",),
+    "капельница": ("инфузионная система",),
+    "укол": ("инъекция",),
+    "табл": ("таблетка",),
+    "капс": ("капсула",),
+    "амп": ("ампула",),
+    "фл": ("флакон",),
+    "сусп": ("суспензия",),
+    "вв": ("внутривенно",),
+    "вм": ("внутримышечно",),
+    # Transport / facilities / tools
+    "дизтопливо": ("дизельное топливо",),
+    "ушм": ("углошлифовальная машина",),
+    "болгарка": ("углошлифовальная машина",),
+    "винтоверт": ("шуруповерт",),
+    "умывальник": ("раковина",),
+    # Stable abbreviations and units
+    "мг": ("миллиграмм",),
+    "мл": ("миллилитр",),
+    "кг": ("килограмм",),
+    "мм": ("миллиметр",),
+    "см": ("сантиметр",),
+    "гб": ("гигабайт",),
+    "мб": ("мегабайт",),
+    "тб": ("терабайт",),
+    "вт": ("ватт",),
+}
+
+MANUAL_PHRASE_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "мобильный телефон": ("сотовый телефон", "телефон сотовой связи", "смартфон"),
+    "веб камера": ("вебкамера", "web camera"),
+    "многофункциональное устройство": (
+        "мфу",
+        "принтер сканер копир",
+        "сканер принтер копир",
+        "сканер копир принтер",
+    ),
+    "флеш накопитель": ("usb накопитель", "usb флешка", "флеш драйв"),
+    "usb накопитель": ("флеш накопитель", "usb флешка", "флеш драйв"),
+    "источник бесперебойного питания": ("ибп", "бесперебойник"),
+    "программное обеспечение": ("софт", "software"),
+    "электронная подпись": ("эцп", "квалифицированная электронная подпись", "кэп"),
+    "квалифицированная электронная подпись": ("кэп", "эцп", "электронная подпись"),
+    "электронный документооборот": ("эдо",),
+    "камера видеонаблюдения": ("камера наблюдения", "видеокамера"),
+    "аккумуляторная батарея": ("акб",),
+    "ручка канцелярская": ("канц ручка", "шариковая ручка"),
+    "шариковая ручка": ("ручка канцелярская", "канц ручка"),
+    "лекарственный препарат": ("лекарство", "медикамент"),
+    "дезинфицирующее средство": ("дезсредство", "антисептик"),
+    "инфузионная система": ("капельница",),
+    "дизельное топливо": ("дизтопливо",),
+    "сплит система": ("сплитсистема",),
+    "углошлифовальная машина": ("ушм", "болгарка"),
+    "лакокрасочные материалы": ("лкм",),
+}
 
 
 @dataclass
@@ -212,7 +198,7 @@ def _row_has_header(row: list[str]) -> bool:
 
 
 def _detect_csv_dialect(catalog_path: Path) -> csv.Dialect:
-    sample = catalog_path.read_text(encoding="utf-8-sig", errors="ignore")[:8192]
+    sample = catalog_path.read_text(encoding="utf-8-sig", errors="ignore").replace("\x00", "")[:8192]
     try:
         return csv.Sniffer().sniff(sample, delimiters=";,")
     except csv.Error:
@@ -221,16 +207,27 @@ def _detect_csv_dialect(catalog_path: Path) -> csv.Dialect:
         return dialect
 
 
+def _iter_clean_csv_lines(handle: Iterable[str]) -> Iterable[str]:
+    for line in handle:
+        yield line.replace("\x00", "")
+
+
 def iter_catalog_records(catalog_path: Path) -> Iterable[CatalogRecord]:
     dialect = _detect_csv_dialect(catalog_path)
     with catalog_path.open("r", encoding="utf-8-sig", newline="") as handle:
-        reader = csv.reader(handle, dialect)
+        first_line = handle.readline()
+        if not first_line:
+            return
+        reader = csv.reader(
+            itertools.chain([first_line.replace("\x00", "")], _iter_clean_csv_lines(handle)),
+            dialect,
+        )
         first_row = next(reader, None)
         if not first_row:
             return
         if _row_has_header(first_row):
             handle.seek(0)
-            dict_reader = csv.DictReader(handle, dialect=dialect)
+            dict_reader = csv.DictReader(_iter_clean_csv_lines(handle), dialect=dialect)
             for row in dict_reader:
                 name = (
                     row.get("clean_name")
@@ -282,6 +279,22 @@ def _looks_like_bad_alias(normalized: str) -> bool:
     return False
 
 
+def _is_acronym_like_alias(alias_raw: str, normalized_alias: str) -> bool:
+    compact_raw = re.sub(r"[\s().,_/-]+", "", alias_raw)
+    compact_normalized = normalized_alias.replace(" ", "")
+    if not compact_raw or not compact_normalized:
+        return False
+    if len(compact_normalized) < 2 or len(compact_normalized) > 16:
+        return False
+    if re.fullmatch(r"[IVXLCDMivxlcdm]+", compact_raw):
+        return False
+    if compact_raw.isupper():
+        return True
+    if re.fullmatch(r"[A-Za-z0-9]{2,16}", compact_raw):
+        return True
+    return False
+
+
 def _extract_parenthetical_alias_pairs(text: str) -> list[tuple[str, str, bool]]:
     pairs: list[tuple[str, str, bool]] = []
     if not text:
@@ -304,6 +317,8 @@ def _extract_parenthetical_alias_pairs(text: str) -> list[tuple[str, str, bool]]
         if len(alias_compact) > 18:
             continue
         if len(alias_compact) >= len(base_compact):
+            continue
+        if not _is_acronym_like_alias(alias_raw, alias):
             continue
         if _looks_like_bad_alias(base) or _looks_like_bad_alias(alias):
             continue
@@ -334,6 +349,8 @@ def _append_mapping(
     source_normalized = normalize_text(source)
     target_normalized = normalize_text(target)
     if not source_normalized or not target_normalized or source_normalized == target_normalized:
+        return
+    if stem_tokens(tokenize(source_normalized)) == stem_tokens(tokenize(target_normalized)):
         return
     if len(tokenize(source_normalized)) == 1:
         token_synonyms.setdefault(source_normalized, []).append(target_normalized)
@@ -366,15 +383,17 @@ def generate_synonyms_payload(
     token_synonyms: dict[str, list[str]] = {}
     phrase_synonyms: dict[str, list[str]] = {}
 
-    for group in CONCEPT_GROUPS:
-        normalized_group = unique_preserve_order(normalize_text(item) for item in group if normalize_text(item))
-        for source in normalized_group:
-            for target in normalized_group:
-                if source == target:
-                    continue
-                if not _target_tokens_supported(target, token_counter):
-                    continue
-                _append_mapping(token_synonyms, phrase_synonyms, source, target)
+    for source, targets in MANUAL_TOKEN_SYNONYMS.items():
+        for target in targets:
+            if not _target_tokens_supported(target, token_counter):
+                continue
+            _append_mapping(token_synonyms, phrase_synonyms, source, target)
+
+    for source, targets in MANUAL_PHRASE_SYNONYMS.items():
+        for target in targets:
+            if not _target_tokens_supported(target, token_counter):
+                continue
+            _append_mapping(token_synonyms, phrase_synonyms, source, target)
 
     for (source, target), count in auto_pairs.items():
         if count < min_auto_pair_count and (source, target) not in auto_short_aliases:
@@ -403,7 +422,8 @@ def generate_synonyms_payload(
             "catalog_path": str(catalog_path),
             "rows_scanned": row_count,
             "dataset_token_vocab_size": len(token_counter),
-            "manual_concept_group_count": len(CONCEPT_GROUPS),
+            "manual_token_rule_count": len(MANUAL_TOKEN_SYNONYMS),
+            "manual_phrase_rule_count": len(MANUAL_PHRASE_SYNONYMS),
             "auto_parenthetical_pair_count": sum(1 for count in auto_pairs.values() if count >= min_auto_pair_count),
         },
         "phrase_synonyms": finalized_phrase_synonyms,

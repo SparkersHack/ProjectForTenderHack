@@ -150,6 +150,42 @@ class ApiTests(unittest.TestCase):
                     "альбом для рисования а4 бумага",
                 ]
             )
+            writer.writerow(
+                [
+                    "ste-9",
+                    "Анализатор мочи полуавтоматический",
+                    "анализатор мочи полуавтоматический",
+                    "Анализаторы мочи",
+                    "анализаторы мочи",
+                    "Тип | Производительность",
+                    "2",
+                    "анализатор мочи анализаторы мочи",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-10",
+                    "Услуги по организационно техническому обеспечению закупочной деятельности",
+                    "услуги по организационно техническому обеспечению закупочной деятельности",
+                    "Услуги по организационно техническому обеспечению закупочной деятельности",
+                    "услуги по организационно техническому обеспечению закупочной деятельности",
+                    "Вид услуги | Сфера",
+                    "2",
+                    "услуги организационно техническое обеспечение закупочная деятельность",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-11",
+                    "Доска магнитно маркерная настенная",
+                    "доска магнитно маркерная настенная",
+                    "Доски магнитно маркерные",
+                    "доски магнитно маркерные",
+                    "Тип | Размещение",
+                    "2",
+                    "доска магнитно маркерная настенная",
+                ]
+            )
 
         with cls.raw_catalog_path.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.writer(handle, delimiter=";")
@@ -215,6 +251,30 @@ class ApiTests(unittest.TestCase):
                     "Альбом для рисования А4",
                     "Альбомы для рисования",
                     "Формат:А4;Листы:24;Бумага:офсет",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-9",
+                    "Анализатор мочи полуавтоматический",
+                    "Анализаторы мочи",
+                    "Тип:полуавтоматический;Производительность:200 тестов в час",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-10",
+                    "Услуги по организационно техническому обеспечению закупочной деятельности",
+                    "Услуги по организационно техническому обеспечению закупочной деятельности",
+                    "Вид услуги:организационно-техническое обеспечение;Сфера:закупочная деятельность",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-11",
+                    "Доска магнитно маркерная настенная",
+                    "Доски магнитно маркерные",
+                    "Тип:магнитно-маркерная;Размещение:настенная",
                 ]
             )
 
@@ -309,6 +369,7 @@ class ApiTests(unittest.TestCase):
                     (4, "Трубы стальные", "трубы стальные"),
                     (5, "Плазмозамещающие и перфузионные растворы", "плазмозамещающие и перфузионные растворы"),
                     (6, "Альбомы для рисования", "альбомы для рисования"),
+                    (7, "Анализаторы мочи", "анализаторы мочи"),
                 ],
             )
             conn.executemany(
@@ -374,6 +435,9 @@ class ApiTests(unittest.TestCase):
                     ("ste-5", "9999999999", "Москва", 5, 820.0, 790.0, "2025-01-20"),
                     ("ste-7", "1111111111", "Москва", 4, 1450.0, 1390.0, "2025-01-22"),
                     ("ste-8", "2222222222", "Москва", 1, 120.0, 110.0, "2025-01-22"),
+                    ("ste-9", "3333333333", "Москва", 2, 35000.0, 32990.0, "2025-01-25"),
+                    ("ste-10", "4444444444", "Москва", 1, 150000.0, 150000.0, "2025-01-26"),
+                    ("ste-11", "5555555556", "Москва", 3, 6500.0, 5990.0, "2025-01-26"),
                 ],
             )
             conn.commit()
@@ -816,7 +880,54 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(payload)
         suggestion_texts = self._suggestion_texts(payload)
         self.assertNotIn("стул на", [text.lower() for text in suggestion_texts])
-        self.assertIn("стул", [text.lower() for text in suggestion_texts])
+        self.assertTrue(any(text.lower().startswith("стул") for text in suggestion_texts))
+
+    def test_suggestions_dedupe_morphological_variants_of_same_phrase(self) -> None:
+        response = self.client.get(
+            "/api/search/suggestions",
+            params={
+                "q": "анализ",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload)
+        suggestion_texts = [text.lower() for text in self._suggestion_texts(payload)]
+        self.assertIn("анализатор мочи полуавтоматический", suggestion_texts)
+        self.assertIn("анализаторы мочи", suggestion_texts)
+        self.assertNotIn("анализатор мочи", suggestion_texts)
+
+    def test_suggestions_keep_full_long_category_phrase(self) -> None:
+        response = self.client.get(
+            "/api/search/suggestions",
+            params={
+                "q": "услуги",
+                "viewed_categories": "Услуги по организационно техническому обеспечению закупочной деятельности",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload)
+        suggestion_texts = [text.lower() for text in self._suggestion_texts(payload)]
+        self.assertIn(
+            "услуги по организационно техническому обеспечению закупочной деятельности",
+            suggestion_texts,
+        )
+        self.assertNotIn("услуги по организационно техническому обеспечению", suggestion_texts)
+
+    def test_suggestions_keep_full_meaningful_product_phrase(self) -> None:
+        response = self.client.get(
+            "/api/search/suggestions",
+            params={
+                "q": "доска",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload)
+        suggestion_texts = [text.lower() for text in self._suggestion_texts(payload)]
+        self.assertIn("доска магнитно маркерная настенная", suggestion_texts)
+        self.assertNotIn("доска магнитно", suggestion_texts)
 
 
 if __name__ == "__main__":

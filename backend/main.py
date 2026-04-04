@@ -30,7 +30,7 @@ from tenderhack.personalization import PersonalizationService
 from tenderhack.personalization_runtime import PersonalizationRuntimeService
 from tenderhack.search import SearchService
 from tenderhack.search_rerank_model import SearchRerankPredictor
-from tenderhack.text import normalize_text, stem_token, tokenize, unique_preserve_order
+from tenderhack.text import normalize_text, stem_token, stem_tokens, tokenize, unique_preserve_order
 
 
 def _env_path(name: str, default: Path) -> Path:
@@ -193,7 +193,13 @@ class EventResponsePayload(BaseModel):
 class TenderHackApiService:
     LOGIN_CACHE_VERSION = 6
     SEARCH_CACHE_VERSION = 9
-    SUGGESTIONS_CACHE_VERSION = 15
+    SUGGESTIONS_CACHE_VERSION = 16
+    _SUGGESTION_TYPE_PRIORITY = {
+        "correction": 4,
+        "product": 3,
+        "query": 2,
+        "category": 1,
+    }
 
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
@@ -698,14 +704,11 @@ class TenderHackApiService:
         if not name_tokens:
             return ""
 
-        limit = 2 if len(query_tokens) <= 1 else 3
         phrase_tokens: List[str] = []
         for token in name_tokens:
             if token.isdigit() or any(char.isdigit() for char in token):
                 break
             phrase_tokens.append(token)
-            if len(phrase_tokens) >= limit:
-                break
         phrase_tokens = TenderHackApiService._trim_trailing_connector_tokens(phrase_tokens)
         min_tokens = 1 if len(query_tokens) <= 1 else 2
         if len(phrase_tokens) < min_tokens:
@@ -718,7 +721,7 @@ class TenderHackApiService:
         category_tokens = TenderHackApiService._trim_trailing_connector_tokens(category_tokens)
         if not category_tokens:
             return ""
-        return " ".join(category_tokens[:5])
+        return " ".join(category_tokens)
 
     @staticmethod
     def _significant_tokens(value: str) -> List[str]:
@@ -826,8 +829,6 @@ class TenderHackApiService:
             if len(token) == 2 and not phrase_tokens:
                 continue
             phrase_tokens.append(token)
-            if len(phrase_tokens) >= 4:
-                break
 
         phrase_tokens = cls._trim_trailing_connector_tokens(phrase_tokens)
         phrase = " ".join(phrase_tokens)
@@ -1355,18 +1356,48 @@ class TenderHackApiService:
                     merged.append(group[index])
         return TenderHackApiService._dedupe_suggestions(merged)
 
-    @staticmethod
-    def _dedupe_suggestions(suggestions: List[SuggestionPayload]) -> List[SuggestionPayload]:
-        deduped_by_text: dict[str, SuggestionPayload] = {}
+    @classmethod
+    def _suggestion_dedupe_key(cls, text: str) -> str:
+        normalized_text = normalize_text(text)
+        if not normalized_text:
+            return ""
+
+        stemmed_tokens = stem_tokens(tokenize(normalized_text))
+        if stemmed_tokens:
+            return " ".join(stemmed_tokens)
+        return normalized_text
+
+    @classmethod
+    def _is_better_suggestion(cls, candidate: SuggestionPayload, current: SuggestionPayload) -> bool:
+        if candidate.score != current.score:
+            return candidate.score > current.score
+
+        candidate_type_rank = cls._SUGGESTION_TYPE_PRIORITY.get(candidate.type, 0)
+        current_type_rank = cls._SUGGESTION_TYPE_PRIORITY.get(current.type, 0)
+        if candidate_type_rank != current_type_rank:
+            return candidate_type_rank > current_type_rank
+
+        candidate_text = normalize_text(candidate.text)
+        current_text = normalize_text(current.text)
+        if len(candidate_text) != len(current_text):
+            return len(candidate_text) < len(current_text)
+        return candidate_text < current_text
+
+    @classmethod
+    def _dedupe_suggestions(cls, suggestions: List[SuggestionPayload]) -> List[SuggestionPayload]:
+        deduped_by_key: dict[str, SuggestionPayload] = {}
         order: List[str] = []
         for item in suggestions:
-            normalized_text = normalize_text(item.text)
-            if not normalized_text:
+            dedupe_key = cls._suggestion_dedupe_key(item.text)
+            if not dedupe_key:
                 continue
-            if normalized_text not in deduped_by_text:
-                deduped_by_text[normalized_text] = item
-                order.append(normalized_text)
-        return [deduped_by_text[key] for key in order]
+            if dedupe_key not in deduped_by_key:
+                deduped_by_key[dedupe_key] = item
+                order.append(dedupe_key)
+                continue
+            if cls._is_better_suggestion(item, deduped_by_key[dedupe_key]):
+                deduped_by_key[dedupe_key] = item
+        return [deduped_by_key[key] for key in order]
 
     @staticmethod
     def _search_cache_data(

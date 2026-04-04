@@ -90,6 +90,16 @@ class TypoCorrector:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
 
+    @staticmethod
+    def _is_inflection_only_variant(source: str, candidate: str) -> bool:
+        if source == candidate:
+            return False
+        if not re.fullmatch(r"[а-я]+", source) or not re.fullmatch(r"[а-я]+", candidate):
+            return False
+        if len(source) <= 4 or len(candidate) <= 4:
+            return False
+        return stem_token(source) == stem_token(candidate)
+
     def completion_candidates(self, token: str, limit: int = 6) -> List[str]:
         token = token.strip()
         if len(token) < 3 or token.isdigit():
@@ -196,6 +206,8 @@ class TypoCorrector:
                     best_token = candidate
                     best_distance = distance
                     best_frequency = row["frequency"]
+            if self._is_inflection_only_variant(token, best_token):
+                best_token = token
             corrected.append(best_token)
             if best_token != token:
                 applied.append({"source": token, "target": best_token})

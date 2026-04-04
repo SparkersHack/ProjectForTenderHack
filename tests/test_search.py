@@ -90,6 +90,18 @@ class SearchServiceTests(unittest.TestCase):
                     "мфу многофункциональное устройство",
                 ]
             )
+            writer.writerow(
+                [
+                    "ste-5",
+                    "Сифон бутылочный с горлышком",
+                    "сифон бутылочный с горлышком",
+                    "Сифоны сантехнические",
+                    "сифоны сантехнические",
+                    "Тип | Конструкция",
+                    "2",
+                    "сифон бутылочный горлышко",
+                ]
+            )
 
         cls.synonyms_path.write_text(
             json.dumps(
@@ -221,6 +233,12 @@ class SearchServiceTests(unittest.TestCase):
             for target in item["targets"]
         }
         self.assertTrue({"канцелярская", "канцелярские"} & completion_targets)
+
+    def test_inflectional_variant_is_not_forced_into_different_wordform(self) -> None:
+        payload = self.service.search("бутылочное горлышко", top_k=3, min_score=0.0)
+        self.assertEqual(payload["query"]["corrected_query"], "бутылочное горлышко")
+        self.assertFalse(payload["query"]["applied_corrections"])
+        self.assertEqual(payload["results"][0]["ste_id"], "ste-5")
 
     def test_search_returns_pagination_metadata(self) -> None:
         payload = self.service.search("ручка", limit=1, offset=0, min_score=0.0)
