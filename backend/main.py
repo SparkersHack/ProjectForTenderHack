@@ -135,6 +135,7 @@ class UserPayload(BaseModel):
     id: str
     inn: str
     region: str
+    entityType: Optional[str] = None
     customerName: Optional[str] = None
     organizationTypeCode: Optional[str] = None
     organizationTypeLabel: Optional[str] = None
@@ -220,9 +221,9 @@ class EventResponsePayload(BaseModel):
 
 
 class TenderHackApiService:
-    LOGIN_CACHE_VERSION = 9
-    SEARCH_CACHE_VERSION = 12
-    SUGGESTIONS_CACHE_VERSION = 27
+    LOGIN_CACHE_VERSION = 13
+    SEARCH_CACHE_VERSION = 15
+    SUGGESTIONS_CACHE_VERSION = 32
     PROFILE_TOP_CATEGORIES_LIMIT = 6
     PROFILE_FREQUENT_PRODUCTS_LIMIT = 18
     MAX_HISTORY_CATEGORY_SUGGESTIONS = 1
@@ -245,6 +246,7 @@ class TenderHackApiService:
         self.settings = settings
         self._validate_required_paths()
         self.cache_service = CacheService(url=settings.redis_url, prefix="tenderhack")
+        self._profile_db_attached = False
         self.description_service = CatalogDescriptionService(raw_catalog_path=settings.raw_ste_catalog_path)
         self.online_state_service = OnlineStateService(
             cache_service=self.cache_service,
@@ -295,6 +297,19 @@ class TenderHackApiService:
         self.description_service.close()
         self.cache_service.close()
 
+    def _ensure_profile_db_attached(self) -> None:
+        if self._profile_db_attached:
+            return
+        attached_rows = self.search_service.conn.execute("PRAGMA database_list").fetchall()
+        if any(str(row[1]) == "profile_db" for row in attached_rows if len(row) >= 2):
+            self._profile_db_attached = True
+            return
+        self.search_service.conn.execute(
+            "ATTACH DATABASE ? AS profile_db",
+            (str(self.settings.preprocessed_db_path),),
+        )
+        self._profile_db_attached = True
+
     @staticmethod
     def _resolve_runtime_user_id(*, user_id: Optional[str], user_inn: Optional[str]) -> str:
         if user_id:
@@ -316,6 +331,12 @@ class TenderHackApiService:
 
     @staticmethod
     def _resolve_organization_type_payload(*, profile: dict, customer_name_context: dict) -> dict:
+        if str(profile.get("entity_type") or "") == "supplier":
+            return {
+                "organizationTypeCode": "supplier",
+                "organizationTypeLabel": "Поставщик",
+                "organizationTypeSource": "По профилю поставщика",
+            }
         name_code = str(customer_name_context.get("institution_name_archetype") or "").strip()
         name_label = str(customer_name_context.get("institution_name_archetype_label") or "").strip()
         history_code = str(profile.get("institution_archetype") or "").strip()
@@ -365,11 +386,11 @@ class TenderHackApiService:
         if isinstance(cached_payload, dict):
             return UserPayload(**cached_payload)
 
-        profile = self.personalization_service.build_customer_profile(
-            customer_inn=inn,
+        profile = self.personalization_service.build_profile_by_inn(
+            inn,
             top_ste=self.PROFILE_FREQUENT_PRODUCTS_LIMIT,
         )
-        customer_name_context = self.personalization_service.get_customer_name_context(inn)
+        customer_name_context = self.personalization_service.get_entity_name_context(inn)
         organization_type_payload = self._resolve_organization_type_payload(
             profile=profile,
             customer_name_context=customer_name_context,
@@ -382,13 +403,19 @@ class TenderHackApiService:
             if item.get("category")
         ]
         region = str(profile.get("customer_region") or "")
+        entity_type = str(profile.get("entity_type") or "customer")
         frequent_products = self._load_frequent_products(
-            recommended_ste[: self.PROFILE_FREQUENT_PRODUCTS_LIMIT]
+            recommended_ste[: self.PROFILE_FREQUENT_PRODUCTS_LIMIT],
+            entity_type=entity_type,
+        )
+        profile_history_reason = (
+            "Часто поставлялось поставщиком" if entity_type == "supplier" else "Часто закупалось учреждением"
         )
         payload = UserPayload(
             id=f"user-{inn}",
             inn=inn,
             region=region,
+            entityType=entity_type,
             customerName=str(customer_name_context.get("customer_name") or "") or None,
             organizationTypeCode=str(organization_type_payload.get("organizationTypeCode") or "") or None,
             organizationTypeLabel=str(organization_type_payload.get("organizationTypeLabel") or "") or None,
@@ -399,7 +426,7 @@ class TenderHackApiService:
                     "category": str(item.get("category") or ""),
                     "purchaseCount": int(item.get("purchase_count") or 0),
                     "totalAmount": round(float(item.get("total_amount") or 0.0), 2),
-                    "reason": str(item.get("reason") or "Часто закупалось учреждением"),
+                    "reason": str(item.get("reason") or profile_history_reason),
                     "recommendationScore": round(float(item.get("recommendation_score") or item.get("weight") or 0.0), 4),
                 }
                 for item in recommended_categories[: self.PROFILE_TOP_CATEGORIES_LIMIT]
@@ -409,7 +436,7 @@ class TenderHackApiService:
         self.cache_service.set_json(cache_key, self._model_dump(payload), ttl_seconds=self.settings.login_cache_ttl_seconds)
         return payload
 
-    def _load_frequent_products(self, top_ste: List[dict]) -> List[dict]:
+    def _load_frequent_products(self, top_ste: List[dict], *, entity_type: str = "customer") -> List[dict]:
         if not top_ste:
             return []
 
@@ -432,6 +459,9 @@ class TenderHackApiService:
 
         name_by_ste_id = {str(row["ste_id"]): str(row["clean_name"]) for row in rows}
         result: List[dict] = []
+        profile_history_reason = (
+            "Часто поставлялось поставщиком" if str(entity_type or "") == "supplier" else "Часто закупалось учреждением"
+        )
         for item in top_ste:
             ste_id = str(item.get("ste_id") or "")
             if not ste_id:
@@ -443,7 +473,7 @@ class TenderHackApiService:
                     "category": str(item.get("category") or ""),
                     "purchaseCount": int(item.get("purchase_count") or 0),
                     "totalAmount": round(float(item.get("total_amount") or 0.0), 2),
-                    "reason": str(item.get("reason") or "Часто закупалось учреждением"),
+                    "reason": str(item.get("reason") or profile_history_reason),
                     "recommendationScore": round(float(item.get("recommendation_score") or item.get("weight") or 0.0), 4),
                 }
             )
@@ -613,6 +643,7 @@ class TenderHackApiService:
             },
         )
 
+        resolved_entity_type = self.personalization_service.detect_entity_type(user_context.inn) if user_context.inn else "unknown"
         products: List[ProductPayload] = []
         for item in paginated_results:
             ste_id = str(item["ste_id"])
@@ -622,6 +653,7 @@ class TenderHackApiService:
                 category=str(item.get("category") or ""),
                 session_categories=session_categories,
                 is_bounced=bool(item.get("reason_to_hide")),
+                entity_type=resolved_entity_type,
             )
             products.append(
                 ProductPayload(
@@ -745,7 +777,7 @@ class TenderHackApiService:
             product_suggestions = [
                 item
                 for item in product_suggestions
-                if str(item.reason or "") == "Часто закупалось"
+                if str(item.reason or "") in {"Часто закупалось", "Часто поставлялось"}
             ]
         category_suggestions = self._build_personalized_category_suggestions(
             query=query,
@@ -947,6 +979,47 @@ class TenderHackApiService:
         return " ".join(phrase_tokens)
 
     @classmethod
+    def _query_anchored_name_phrase(cls, name: str, query: str) -> str:
+        query_tokens = cls._significant_tokens(query)
+        if len(query_tokens) != 1:
+            return ""
+
+        base_phrase = cls._product_suggestion_phrase(name) or cls._abstract_name_phrase(name, query)
+        phrase_tokens = tokenize(base_phrase)
+        if len(phrase_tokens) < 2:
+            return ""
+
+        query_token = query_tokens[0]
+        query_stem = stem_token(query_token)
+        anchor_index = -1
+        for index, token in enumerate(phrase_tokens[1:], start=1):
+            token_stem = stem_token(token)
+            if token.startswith(query_token) or query_token.startswith(token):
+                anchor_index = index
+                break
+            if query_stem and token_stem and (token_stem.startswith(query_stem) or query_stem.startswith(token_stem)):
+                anchor_index = index
+                break
+
+        if anchor_index < 1:
+            return ""
+
+        anchored_tokens = cls._trim_verbose_product_phrase_tokens(
+            [
+                phrase_tokens[anchor_index],
+                *phrase_tokens[:anchor_index],
+                *phrase_tokens[anchor_index + 1 :],
+            ]
+        )
+        if len(anchored_tokens) < 2:
+            return ""
+
+        anchored_phrase = " ".join(anchored_tokens)
+        if not anchored_phrase or normalize_text(anchored_phrase) == normalize_text(base_phrase):
+            return ""
+        return anchored_phrase[:1].upper() + anchored_phrase[1:]
+
+    @classmethod
     def _matched_query_token_phrase(cls, *, source_text: str, query: str) -> str:
         query_stems = unique_preserve_order(
             stem_token(token)
@@ -994,6 +1067,30 @@ class TenderHackApiService:
                 continue
             result.append(token)
         return result
+
+    @staticmethod
+    def _secondary_token_like_pattern(query_norm: str) -> str:
+        return f"% {query_norm}%"
+
+    @classmethod
+    def _query_head_token_bonus(cls, query: str, candidate: str) -> float:
+        query_tokens = cls._significant_tokens(query)
+        candidate_tokens = cls._significant_tokens(candidate)
+        if len(query_tokens) != 1 or not candidate_tokens:
+            return 0.0
+
+        query_token = query_tokens[0]
+        candidate_token = candidate_tokens[0]
+        if not query_token or not candidate_token:
+            return 0.0
+        if candidate_token == query_token:
+            return 18.0
+
+        query_stem = stem_token(query_token)
+        candidate_stem = stem_token(candidate_token)
+        if query_stem and candidate_stem and candidate_stem == query_stem:
+            return 12.0
+        return 0.0
 
     @classmethod
     def _token_prefix_match_score(cls, query: str, candidate: str, *, allow_secondary_tokens: bool = True) -> float:
@@ -1128,11 +1225,13 @@ class TenderHackApiService:
         for item in results:
             clean_name = str(item.get("clean_name") or "")
             matched_query_phrase = cls._matched_query_token_phrase(source_text=clean_name, query=query)
+            anchored_name_phrase = cls._query_anchored_name_phrase(clean_name, query)
             name_phrase = cls._abstract_name_phrase(clean_name, query)
             category_phrase = cls._compact_category_phrase(str(item.get("category") or ""))
 
             for candidate, suggestion_type, force_include in [
                 (matched_query_phrase, "query", True),
+                (anchored_name_phrase, "query", False),
                 (name_phrase, "query", False),
                 (category_phrase, "category", False),
             ]:
@@ -1189,17 +1288,23 @@ class TenderHackApiService:
             if not candidate_norm or candidate_norm == query_norm or not candidate_norm.startswith(query_norm):
                 continue
 
+            secondary_token_pattern = self._secondary_token_like_pattern(candidate_norm)
+
             rows = self.search_service.conn.execute(
                 """
                 SELECT clean_name, normalized_name, category, normalized_category
                 FROM ste_catalog
                 WHERE normalized_name LIKE ?
+                   OR normalized_name LIKE ?
+                   OR normalized_category LIKE ?
                    OR normalized_category LIKE ?
                 ORDER BY
                     CASE
                         WHEN normalized_name = ? THEN 0
-                        WHEN normalized_category = ? THEN 1
-                        ELSE 2
+                        WHEN normalized_name LIKE ? THEN 1
+                        WHEN normalized_category = ? THEN 2
+                        WHEN normalized_category LIKE ? THEN 3
+                        ELSE 4
                     END,
                     length(normalized_name) ASC,
                     length(normalized_category) ASC,
@@ -1207,7 +1312,16 @@ class TenderHackApiService:
                     normalized_category ASC
                 LIMIT 12
                 """,
-                (f"{candidate_norm}%", f"{candidate_norm}%", candidate_norm, candidate_norm),
+                (
+                    f"{candidate_norm}%",
+                    secondary_token_pattern,
+                    f"{candidate_norm}%",
+                    secondary_token_pattern,
+                    candidate_norm,
+                    f"{candidate_norm}%",
+                    candidate_norm,
+                    f"{candidate_norm}%",
+                ),
             ).fetchall()
             if not rows:
                 continue
@@ -1225,8 +1339,10 @@ class TenderHackApiService:
                 if not clean_name:
                     continue
                 normalized_name = normalize_text(str(row["normalized_name"] or clean_name))
-                phrase = self._product_suggestion_phrase(clean_name) or self._abstract_name_phrase(clean_name, query)
-                if normalize_text(phrase) == candidate_norm or normalized_name == candidate_norm:
+                anchored_phrase = self._query_anchored_name_phrase(clean_name, query)
+                phrase = anchored_phrase or self._product_suggestion_phrase(clean_name) or self._abstract_name_phrase(clean_name, query)
+                normalized_phrase = normalize_text(phrase)
+                if normalized_phrase == candidate_norm or normalized_name == candidate_norm or normalized_phrase.startswith(candidate_norm):
                     query_text = phrase or clean_name
                     break
             normalized_query_text = normalize_text(query_text)
@@ -1321,7 +1437,7 @@ class TenderHackApiService:
             return [item for item in cached_payload if isinstance(item, dict)]
 
         try:
-            profile = self.personalization_service.build_customer_profile(customer_inn=user_inn, top_ste=150)
+            profile = self.personalization_service.build_profile_by_inn(user_inn, top_ste=150)
             recommended_ste = list(profile.get("recommended_ste") or profile.get("top_ste") or [])
             frequent_products = self._load_frequent_products(recommended_ste[:150])
         except Exception:
@@ -1398,7 +1514,7 @@ class TenderHackApiService:
         cache_key = self.cache_service.build_key(
             "same_type_prefix_products",
             data={
-                "version": 4,
+                "version": 7,
                 "inn": user_inn,
                 "query": query_norm,
             },
@@ -1408,7 +1524,7 @@ class TenderHackApiService:
             return [item for item in cached_payload if isinstance(item, dict)]
 
         try:
-            name_context = self.personalization_service.get_customer_name_context(user_inn, limit=180)
+            name_context = self.personalization_service.get_entity_name_context(user_inn, limit=180)
         except Exception:
             return []
 
@@ -1417,46 +1533,101 @@ class TenderHackApiService:
         if not same_type_peer_inns or archetype == "general":
             return []
 
+        self._ensure_profile_db_attached()
+        peer_placeholders = ", ".join("?" for _ in same_type_peer_inns)
+        secondary_pattern = self._secondary_token_like_pattern(query_norm)
         candidate_rows = self.search_service.conn.execute(
-            """
-            SELECT ste_id, clean_name, normalized_name, category, normalized_category
-            FROM ste_catalog
-            WHERE normalized_name LIKE ?
-            ORDER BY length(normalized_name) ASC, normalized_name ASC
-            LIMIT 120
+            f"""
+            WITH peer_stats AS (
+                SELECT
+                    cs.ste_id,
+                    SUM(cs.purchase_count) AS purchase_count,
+                    SUM(cs.total_amount) AS total_amount
+                FROM profile_db.customer_ste_stats cs
+                WHERE cs.customer_inn IN ({peer_placeholders})
+                GROUP BY cs.ste_id
+            )
+            SELECT
+                sc.ste_id,
+                sc.clean_name,
+                sc.normalized_name,
+                sc.category,
+                sc.normalized_category,
+                sc.key_tokens,
+                ps.purchase_count,
+                ps.total_amount
+            FROM peer_stats ps
+            JOIN ste_catalog sc ON sc.ste_id = ps.ste_id
+            WHERE sc.normalized_name LIKE ?
+               OR sc.normalized_name LIKE ?
+               OR sc.normalized_category LIKE ?
+               OR sc.normalized_category LIKE ?
+               OR sc.key_tokens LIKE ?
+               OR sc.key_tokens LIKE ?
+            ORDER BY
+                ps.purchase_count DESC,
+                ps.total_amount DESC,
+                length(sc.normalized_name) ASC,
+                sc.normalized_name ASC
+            LIMIT 320
             """,
-            (f"{query_norm}%",),
+            [
+                *same_type_peer_inns,
+                f"{query_norm}%",
+                secondary_pattern,
+                f"{query_norm}%",
+                secondary_pattern,
+                f"{query_norm}%",
+                secondary_pattern,
+            ],
         ).fetchall()
         if not candidate_rows:
             return []
 
         candidate_ids = [str(row["ste_id"]) for row in candidate_rows if row["ste_id"]]
-        same_type_stats = self._load_same_type_prefix_stats(
-            ste_ids=candidate_ids,
-            peer_inns=same_type_peer_inns,
-            customer_inn=user_inn,
-        )
-        if not same_type_stats:
-            return []
+        candidate_placeholders = ", ".join("?" for _ in candidate_ids)
+        global_rows = self.personalization_service.conn.execute(
+            f"""
+            SELECT
+                ste_id,
+                SUM(purchase_count) AS purchase_count
+            FROM customer_ste_stats
+            WHERE ste_id IN ({candidate_placeholders})
+            GROUP BY ste_id
+            """,
+            candidate_ids,
+        ).fetchall()
+        global_purchase_count_by_ste = {
+            str(row["ste_id"]): float(row["purchase_count"] or 0.0)
+            for row in global_rows
+            if row["ste_id"]
+        }
 
         ranked_products: List[dict] = []
         for row in candidate_rows:
             ste_id = str(row["ste_id"] or "")
             if not ste_id:
                 continue
-            stats = same_type_stats.get(ste_id)
-            if not stats:
-                continue
+            anchored_phrase = self._query_anchored_name_phrase(str(row["clean_name"] or ""), query)
             prefix_score = max(
-                self._token_prefix_match_score(query, str(row["clean_name"] or ""), allow_secondary_tokens=False),
-                self._token_prefix_match_score(query, str(row["normalized_name"] or ""), allow_secondary_tokens=False),
+                self._token_prefix_match_score(query, anchored_phrase, allow_secondary_tokens=False),
+                self._token_prefix_match_score(query, str(row["clean_name"] or "")),
+                self._token_prefix_match_score(query, str(row["normalized_name"] or "")),
+                self._token_prefix_match_score(query, str(row["category"] or row["normalized_category"] or "")),
+                self._token_prefix_match_score(query, str(row["key_tokens"] or "")),
             )
             if prefix_score <= 0:
                 continue
             category_norm = normalize_text(str(row["category"] or row["normalized_category"] or ""))
-            same_type_count = float(stats.get("purchase_count", 0.0) or 0.0)
-            global_count = max(same_type_count, float(stats.get("global_purchase_count", 0.0) or 0.0))
+            same_type_count = float(row["purchase_count"] or 0.0)
+            if same_type_count <= 0:
+                continue
+            global_count = max(same_type_count, float(global_purchase_count_by_ste.get(ste_id, 0.0) or 0.0))
             specificity = same_type_count / global_count if global_count > 0 else 0.0
+            name_type_relevance_score = self.personalization_service.customer_name_archetype_match_score(
+                archetype=archetype,
+                texts=[str(row["clean_name"] or "")],
+            )
             type_relevance_score = self.personalization_service.customer_name_archetype_match_score(
                 archetype=archetype,
                 texts=[
@@ -1476,20 +1647,24 @@ class TenderHackApiService:
             popularity_score = min(14.0, 2.5 * math.log1p(same_type_count))
             specificity_score = 18.0 * specificity
             type_relevance_boost = 10.0 * type_relevance_score
+            explicit_name_type_bonus = 8.0 * name_type_relevance_score
+            head_token_bonus = self._query_head_token_bonus(query, anchored_phrase or str(row["clean_name"] or ""))
             generic_penalty = 10.0 if len(query_norm) <= 4 and type_relevance_score <= 0 else 0.0
             ranked_products.append(
                 {
                     "steId": ste_id,
-                    "name": str(row["clean_name"] or ste_id),
+                    "name": anchored_phrase or str(row["clean_name"] or ste_id),
                     "category": str(row["category"] or ""),
                     "purchaseCount": int(same_type_count),
-                    "totalAmount": round(float(stats.get("total_amount", 0.0) or 0.0), 2),
+                    "totalAmount": round(float(row["total_amount"] or 0.0), 2),
                     "reason": "Популярно у организаций того же типа",
                     "recommendationScore": round(
                         prefix_score * 0.06
                         + popularity_score
                         + specificity_score
                         + type_relevance_boost
+                        + explicit_name_type_bonus
+                        + head_token_bonus
                         - generic_penalty,
                         4,
                     ),
@@ -1983,17 +2158,20 @@ class TenderHackApiService:
 
         raw_candidates: List[dict] = []
 
-        for item in products:
+        for source_index, item in enumerate(products):
             full_name = str(item.get("name") or "").strip()
             if not full_name:
                 continue
             suggestion_phrase = cls._product_suggestion_phrase(full_name) or full_name
-            candidate_norm = normalize_text(suggestion_phrase)
+            anchored_phrase = cls._query_anchored_name_phrase(full_name, query)
+            display_phrase = anchored_phrase or suggestion_phrase
+            candidate_norm = normalize_text(display_phrase)
             full_name_norm = normalize_text(full_name)
             if not full_name_norm or full_name_norm == query_norm:
                 continue
 
             score = max(
+                cls._token_prefix_match_score(query, display_phrase),
                 cls._token_prefix_match_score(query, suggestion_phrase),
                 cls._token_prefix_match_score(query, full_name),
             )
@@ -2002,6 +2180,7 @@ class TenderHackApiService:
 
             score += min(float(item.get("purchaseCount") or 0), 15.0)
             score += min(float(item.get("recommendationScore") or 0.0), 12.0)
+            score += cls._query_head_token_bonus(query, display_phrase)
             if candidate_norm.startswith(query_norm):
                 score += 18.0
             if full_name_norm.startswith(query_norm):
@@ -2011,10 +2190,14 @@ class TenderHackApiService:
             normalized_reason = item_reason.lower()
             if "часто закупалось учреждением" in normalized_reason:
                 reason = "Часто закупалось"
+            elif "часто поставлялось поставщиком" in normalized_reason:
+                reason = "Часто поставлялось"
             elif "того же типа" in normalized_reason or "рекомендуется для" in normalized_reason:
                 reason = "По типу учреждения"
             elif "похожих учреждений" in normalized_reason:
                 reason = "Популярно у похожих учреждений"
+            elif "поставлялось" in normalized_reason or "поставщик" in normalized_reason:
+                reason = "Часто поставлялось"
             elif "учреждени" in normalized_reason:
                 reason = "Часто закупалось"
             elif "регион" in normalized_reason:
@@ -2025,11 +2208,12 @@ class TenderHackApiService:
             raw_candidates.append(
                 {
                     "ste_id": str(item.get("steId") or item.get("ste_id") or ""),
-                    "text": suggestion_phrase,
+                    "text": display_phrase,
                     "suggestion_type": "product",
                     "reason": reason,
                     "category": str(item.get("category") or ""),
                     "base_score": score + 35.0,
+                    "source_rank": -source_index,
                 }
             )
 
@@ -2044,25 +2228,28 @@ class TenderHackApiService:
                 for item in personalized_candidates
                 if (
                     float(item.get("item_boost_weight", 0.0) or 0.0) > 0.0
-                    if str(item.get("reason") or "") == "Часто закупалось"
+                    if str(item.get("reason") or "") in {"Часто закупалось", "Часто поставлялось"}
                     else float(item.get("boost_weight", 0.0) or 0.0) > 0.0
                 )
             ]
         ranked_candidates = [
-            cls._build_suggestion(
-                text=str(item.get("text") or ""),
-                suggestion_type="product",
-                reason=str(item.get("reason") or "Часто закупалось"),
-                score=float(item.get("final_score", item.get("base_score", 0.0)) or 0.0),
+            (
+                float(item.get("source_rank", 0.0) or 0.0),
+                cls._build_suggestion(
+                    text=str(item.get("text") or ""),
+                    suggestion_type="product",
+                    reason=str(item.get("reason") or "Часто закупалось"),
+                    score=float(item.get("final_score", item.get("base_score", 0.0)) or 0.0),
+                ),
             )
             for item in personalized_candidates
             if item.get("text")
         ]
         ranked_candidates.sort(
-            key=lambda item: (item.score, -len(item.text), item.text),
+            key=lambda item: (item[1].score, item[0], -len(item[1].text), item[1].text),
             reverse=True,
         )
-        return cls._dedupe_suggestions(ranked_candidates)
+        return cls._dedupe_suggestions([item[1] for item in ranked_candidates])
 
     @staticmethod
     def _merge_suggestion_groups(*groups: List[SuggestionPayload], query: str = "") -> List[SuggestionPayload]:
@@ -2132,7 +2319,7 @@ class TenderHackApiService:
         reason = str(suggestion.reason or "")
         if reason == "Категория из истории":
             return "history_category"
-        if reason == "Часто закупалось":
+        if reason in {"Часто закупалось", "Часто поставлялось"}:
             return "history_product"
         return ""
 
@@ -2345,6 +2532,7 @@ class TenderHackApiService:
         category: str,
         session_categories: List[str],
         is_bounced: bool,
+        entity_type: str = "customer",
     ) -> Optional[str]:
         if is_bounced:
             return None
@@ -2356,10 +2544,14 @@ class TenderHackApiService:
             return "Рекомендовано вам исходя из корзины"
         if "SESSION_CLICK_BOOST" in codes:
             return "Недавно смотрели"
+        if "SUPPLIER_OWN_PRODUCT" in codes:
+            return "Вы поставляете этот товар"
+        if "SUPPLIER_CATEGORY_MATCH" in codes:
+            return "Похожий товар из вашего ассортимента"
         if "INSTITUTION_TYPE_PREFIX_MATCH" in codes:
             return "По типу учреждения"
         if codes & {"USER_CATEGORY_AFFINITY", "USER_REPEAT_BUY", "RECENT_SIMILAR_PURCHASE", "SUPPLIER_AFFINITY"}:
-            return "На основе ваших закупок"
+            return "На основе ваших поставок" if str(entity_type or "") == "supplier" else "На основе ваших закупок"
         if "SIMILAR_CUSTOMER_POPULARITY" in codes:
             return "Популярно у похожих заказчиков"
         if category_norm and category_norm in session_category_set:

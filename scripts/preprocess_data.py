@@ -186,6 +186,43 @@ def build_sqlite_schema(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (customer_inn, category_id)
         );
 
+        CREATE TABLE IF NOT EXISTS supplier_ste_stats (
+            supplier_inn TEXT NOT NULL,
+            ste_id TEXT NOT NULL,
+            category_id INTEGER NOT NULL,
+            purchase_count INTEGER NOT NULL,
+            total_amount REAL NOT NULL,
+            first_purchase_dt TEXT,
+            last_purchase_dt TEXT,
+            PRIMARY KEY (supplier_inn, ste_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS supplier_category_stats (
+            supplier_inn TEXT NOT NULL,
+            category_id INTEGER NOT NULL,
+            purchase_count INTEGER NOT NULL,
+            total_amount REAL NOT NULL,
+            first_purchase_dt TEXT,
+            last_purchase_dt TEXT,
+            PRIMARY KEY (supplier_inn, category_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS supplier_region_lookup (
+            supplier_inn TEXT PRIMARY KEY,
+            supplier_region TEXT NOT NULL,
+            frequency INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS customer_name_lookup (
+            customer_inn TEXT PRIMARY KEY,
+            customer_name TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS supplier_name_lookup (
+            supplier_inn TEXT PRIMARY KEY,
+            supplier_name TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS region_category_stats (
             customer_region TEXT NOT NULL,
             category_id INTEGER NOT NULL,
@@ -289,6 +326,95 @@ def flush_customer_category(
                 WHEN excluded.last_purchase_dt IS NULL OR excluded.last_purchase_dt = '' THEN customer_category_stats.last_purchase_dt
                 WHEN excluded.last_purchase_dt > customer_category_stats.last_purchase_dt THEN excluded.last_purchase_dt
                 ELSE customer_category_stats.last_purchase_dt
+            END
+        """,
+        rows,
+    )
+    conn.commit()
+    payload.clear()
+
+
+def flush_supplier_ste(
+    conn: sqlite3.Connection,
+    payload: Dict[Tuple[str, str], AggregateStats],
+) -> None:
+    if not payload:
+        return
+    rows = [
+        (
+            supplier_inn,
+            ste_id,
+            agg.category_id,
+            agg.count,
+            agg.total_amount,
+            agg.first_date,
+            agg.last_date,
+        )
+        for (supplier_inn, ste_id), agg in payload.items()
+    ]
+    conn.executemany(
+        """
+        INSERT INTO supplier_ste_stats (
+            supplier_inn, ste_id, category_id, purchase_count, total_amount, first_purchase_dt, last_purchase_dt
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(supplier_inn, ste_id) DO UPDATE SET
+            purchase_count = supplier_ste_stats.purchase_count + excluded.purchase_count,
+            total_amount = supplier_ste_stats.total_amount + excluded.total_amount,
+            first_purchase_dt = CASE
+                WHEN supplier_ste_stats.first_purchase_dt IS NULL OR supplier_ste_stats.first_purchase_dt = '' THEN excluded.first_purchase_dt
+                WHEN excluded.first_purchase_dt IS NULL OR excluded.first_purchase_dt = '' THEN supplier_ste_stats.first_purchase_dt
+                WHEN excluded.first_purchase_dt < supplier_ste_stats.first_purchase_dt THEN excluded.first_purchase_dt
+                ELSE supplier_ste_stats.first_purchase_dt
+            END,
+            last_purchase_dt = CASE
+                WHEN supplier_ste_stats.last_purchase_dt IS NULL OR supplier_ste_stats.last_purchase_dt = '' THEN excluded.last_purchase_dt
+                WHEN excluded.last_purchase_dt IS NULL OR excluded.last_purchase_dt = '' THEN supplier_ste_stats.last_purchase_dt
+                WHEN excluded.last_purchase_dt > supplier_ste_stats.last_purchase_dt THEN excluded.last_purchase_dt
+                ELSE supplier_ste_stats.last_purchase_dt
+            END
+        """,
+        rows,
+    )
+    conn.commit()
+    payload.clear()
+
+
+def flush_supplier_category(
+    conn: sqlite3.Connection,
+    payload: Dict[Tuple[str, int], AggregateStats],
+) -> None:
+    if not payload:
+        return
+    rows = [
+        (
+            supplier_inn,
+            category_id,
+            agg.count,
+            agg.total_amount,
+            agg.first_date,
+            agg.last_date,
+        )
+        for (supplier_inn, category_id), agg in payload.items()
+    ]
+    conn.executemany(
+        """
+        INSERT INTO supplier_category_stats (
+            supplier_inn, category_id, purchase_count, total_amount, first_purchase_dt, last_purchase_dt
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(supplier_inn, category_id) DO UPDATE SET
+            purchase_count = supplier_category_stats.purchase_count + excluded.purchase_count,
+            total_amount = supplier_category_stats.total_amount + excluded.total_amount,
+            first_purchase_dt = CASE
+                WHEN supplier_category_stats.first_purchase_dt IS NULL OR supplier_category_stats.first_purchase_dt = '' THEN excluded.first_purchase_dt
+                WHEN excluded.first_purchase_dt IS NULL OR excluded.first_purchase_dt = '' THEN supplier_category_stats.first_purchase_dt
+                WHEN excluded.first_purchase_dt < supplier_category_stats.first_purchase_dt THEN excluded.first_purchase_dt
+                ELSE supplier_category_stats.first_purchase_dt
+            END,
+            last_purchase_dt = CASE
+                WHEN supplier_category_stats.last_purchase_dt IS NULL OR supplier_category_stats.last_purchase_dt = '' THEN excluded.last_purchase_dt
+                WHEN excluded.last_purchase_dt IS NULL OR excluded.last_purchase_dt = '' THEN supplier_category_stats.last_purchase_dt
+                WHEN excluded.last_purchase_dt > supplier_category_stats.last_purchase_dt THEN excluded.last_purchase_dt
+                ELSE supplier_category_stats.last_purchase_dt
             END
         """,
         rows,
@@ -554,8 +680,13 @@ def process_contracts(
 
     customer_ste_buffer: Dict[Tuple[str, str], AggregateStats] = {}
     customer_category_buffer: Dict[Tuple[str, int], AggregateStats] = {}
+    supplier_ste_buffer: Dict[Tuple[str, str], AggregateStats] = {}
+    supplier_category_buffer: Dict[Tuple[str, int], AggregateStats] = {}
     region_category_buffer: Dict[Tuple[str, int], AggregateStats] = {}
     contract_key_buffer: Dict[Tuple[str, str, str], int] = defaultdict(int)
+    supplier_region_counter: dict[str, Counter[str]] = defaultdict(Counter)
+    customer_name_lookup: Dict[str, str] = {}
+    supplier_name_lookup: Dict[str, str] = {}
 
     unique_customers = set()
     unique_regions = set()
@@ -607,10 +738,21 @@ def process_contracts(
 
             customer_inn = customer_inn or "UNKNOWN"
             customer_region = customer_region or "UNKNOWN"
+            supplier_inn = supplier_inn or "UNKNOWN"
+            supplier_region = supplier_region or "UNKNOWN"
 
             unique_customers.add(customer_inn)
             unique_regions.add(customer_region)
             region_counter[customer_region] += 1
+            supplier_region_counter[supplier_inn][supplier_region] += 1
+            if customer_name and len(normalize_for_search(customer_name)) >= len(
+                normalize_for_search(customer_name_lookup.get(customer_inn, ""))
+            ):
+                customer_name_lookup[customer_inn] = customer_name
+            if supplier_name and len(normalize_for_search(supplier_name)) >= len(
+                normalize_for_search(supplier_name_lookup.get(supplier_inn, ""))
+            ):
+                supplier_name_lookup[supplier_inn] = supplier_name
             year_counter[contract_year] += 1
             category_counter[category_id] += 1
 
@@ -623,6 +765,16 @@ def process_contracts(
             if customer_category_key not in customer_category_buffer:
                 customer_category_buffer[customer_category_key] = AggregateStats(category_id=category_id)
             customer_category_buffer[customer_category_key].update(amount, contract_date, category_id)
+
+            supplier_ste_key = (supplier_inn, ste_id)
+            if supplier_ste_key not in supplier_ste_buffer:
+                supplier_ste_buffer[supplier_ste_key] = AggregateStats(category_id=category_id)
+            supplier_ste_buffer[supplier_ste_key].update(amount, contract_date, category_id)
+
+            supplier_category_key = (supplier_inn, category_id)
+            if supplier_category_key not in supplier_category_buffer:
+                supplier_category_buffer[supplier_category_key] = AggregateStats(category_id=category_id)
+            supplier_category_buffer[supplier_category_key].update(amount, contract_date, category_id)
 
             region_category_key = (customer_region, category_id)
             if region_category_key not in region_category_buffer:
@@ -647,6 +799,10 @@ def process_contracts(
                 flush_customer_ste(conn, customer_ste_buffer)
             if len(customer_category_buffer) >= flush_threshold:
                 flush_customer_category(conn, customer_category_buffer)
+            if len(supplier_ste_buffer) >= flush_threshold:
+                flush_supplier_ste(conn, supplier_ste_buffer)
+            if len(supplier_category_buffer) >= flush_threshold:
+                flush_supplier_category(conn, supplier_category_buffer)
             if len(region_category_buffer) >= flush_threshold:
                 flush_region_category(conn, region_category_buffer)
             if len(contract_key_buffer) >= flush_threshold:
@@ -657,8 +813,31 @@ def process_contracts(
 
     flush_customer_ste(conn, customer_ste_buffer)
     flush_customer_category(conn, customer_category_buffer)
+    flush_supplier_ste(conn, supplier_ste_buffer)
+    flush_supplier_category(conn, supplier_category_buffer)
     flush_region_category(conn, region_category_buffer)
     flush_contract_key_stats(conn, contract_key_buffer)
+
+    supplier_region_rows = []
+    for supplier_inn, counter in supplier_region_counter.items():
+        supplier_region, frequency = counter.most_common(1)[0]
+        supplier_region_rows.append((supplier_inn, supplier_region, frequency))
+    conn.execute("DELETE FROM supplier_region_lookup")
+    conn.executemany(
+        "INSERT INTO supplier_region_lookup (supplier_inn, supplier_region, frequency) VALUES (?, ?, ?)",
+        supplier_region_rows,
+    )
+    conn.execute("DELETE FROM customer_name_lookup")
+    conn.executemany(
+        "INSERT INTO customer_name_lookup (customer_inn, customer_name) VALUES (?, ?)",
+        sorted(customer_name_lookup.items()),
+    )
+    conn.execute("DELETE FROM supplier_name_lookup")
+    conn.executemany(
+        "INSERT INTO supplier_name_lookup (supplier_inn, supplier_name) VALUES (?, ?)",
+        sorted(supplier_name_lookup.items()),
+    )
+    conn.commit()
 
     duplicate_contract_keys = conn.execute(
         "SELECT COALESCE(SUM(row_count - 1), 0) FROM contract_key_stats WHERE row_count > 1"
@@ -711,6 +890,39 @@ def export_relations(conn: sqlite3.Connection, output_dir: Path) -> None:
         ORDER BY cc.purchase_count DESC, cc.total_amount DESC
         """,
         output_dir / "customer_category_stats.csv",
+    )
+    export_query_to_csv(
+        conn,
+        """
+        SELECT
+            ss.supplier_inn,
+            ss.ste_id,
+            cl.category,
+            ss.purchase_count,
+            ROUND(ss.total_amount, 2) AS total_amount,
+            ss.first_purchase_dt,
+            ss.last_purchase_dt
+        FROM supplier_ste_stats ss
+        LEFT JOIN category_lookup cl ON cl.category_id = ss.category_id
+        ORDER BY ss.purchase_count DESC, ss.total_amount DESC
+        """,
+        output_dir / "supplier_ste_stats.csv",
+    )
+    export_query_to_csv(
+        conn,
+        """
+        SELECT
+            sc.supplier_inn,
+            cl.category,
+            sc.purchase_count,
+            ROUND(sc.total_amount, 2) AS total_amount,
+            sc.first_purchase_dt,
+            sc.last_purchase_dt
+        FROM supplier_category_stats sc
+        LEFT JOIN category_lookup cl ON cl.category_id = sc.category_id
+        ORDER BY sc.purchase_count DESC, sc.total_amount DESC
+        """,
+        output_dir / "supplier_category_stats.csv",
     )
     export_query_to_csv(
         conn,

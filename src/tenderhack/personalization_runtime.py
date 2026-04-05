@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
@@ -20,6 +21,8 @@ HISTORY_REASON_PRIORITIES = {
     "RECENT_SIMILAR_PURCHASE": 3.0,
     "USER_CATEGORY_AFFINITY": 2.0,
     "SUPPLIER_AFFINITY": 1.0,
+    "SUPPLIER_OWN_PRODUCT": 2.5,
+    "SUPPLIER_CATEGORY_MATCH": 1.2,
 }
 
 
@@ -124,16 +127,25 @@ class PersonalizationRuntimeService:
             prediction = predictions_by_id.get(candidate_id, {})
             personalization_score = float(prediction.get("personalization_score", 0.0) or 0.0)
             query_match_quality = self._query_match_quality(candidate)
+            supplier_inventory_score, supplier_reason_codes, supplier_reasons = self._supplier_inventory_adjustment(
+                candidate=candidate,
+                user_profile=user_profile,
+                query_match_quality=query_match_quality,
+            )
             dynamic_score, dynamic_reason_codes, dynamic_reasons = self._dynamic_session_adjustment(
                 candidate=candidate,
                 session_state=active_session_state,
             )
             session_priority = self._session_priority(dynamic_reason_codes)
             reason_codes = unique_preserve_order(
-                [str(code) for code in prediction.get("top_reason_codes", [])] + dynamic_reason_codes
+                [str(code) for code in prediction.get("top_reason_codes", [])]
+                + supplier_reason_codes
+                + dynamic_reason_codes
             )
             reasons = unique_preserve_order(
-                [str(text) for text in prediction.get("reasons", [])] + dynamic_reasons
+                [str(text) for text in prediction.get("reasons", [])]
+                + supplier_reasons
+                + dynamic_reasons
             )
             history_priority = self._history_priority(
                 candidate=candidate,
@@ -145,6 +157,7 @@ class PersonalizationRuntimeService:
             final_score = (
                 float(candidate.get("search_score", 0.0))
                 + self.personalization_weight * personalization_score * max(0.25, query_match_quality)
+                + supplier_inventory_score
                 + dynamic_score
                 + min(6.0, history_priority * 0.03)
             )
@@ -171,6 +184,43 @@ class PersonalizationRuntimeService:
             reverse=True,
         )
         return reranked
+
+    @staticmethod
+    def _supplier_inventory_adjustment(
+        *,
+        candidate: Dict[str, object],
+        user_profile: Dict[str, object],
+        query_match_quality: float,
+    ) -> tuple[float, List[str], List[str]]:
+        if str(user_profile.get("entity_type") or "") != "supplier":
+            return 0.0, [], []
+        if query_match_quality < 0.35:
+            return 0.0, [], []
+
+        ste_id = str(candidate.get("ste_id") or candidate.get("candidate_id") or "")
+        category = str(candidate.get("category") or "")
+        ste_counts = {str(key): int(value) for key, value in dict(user_profile.get("ste_counts", {})).items()}
+        category_counts = {str(key): int(value) for key, value in dict(user_profile.get("category_counts", {})).items()}
+
+        own_ste_count = ste_counts.get(ste_id, 0)
+        if own_ste_count > 0:
+            score = 0.9 + min(1.0, math.log1p(float(own_ste_count)) / 4.0)
+            return (
+                round(score, 6),
+                ["SUPPLIER_OWN_PRODUCT"],
+                ["Поставщик уже поставлял этот товар"],
+            )
+
+        own_category_count = category_counts.get(category, 0)
+        if own_category_count > 0 and query_match_quality >= 0.45:
+            score = 0.25 + min(0.75, math.log1p(float(own_category_count)) / 6.0)
+            return (
+                round(score, 6),
+                ["SUPPLIER_CATEGORY_MATCH"],
+                ["Поставщик работает в этой категории"],
+            )
+
+        return 0.0, [], []
 
     def _history_priority(
         self,
@@ -311,18 +361,27 @@ class PersonalizationRuntimeService:
     ) -> Dict[str, object]:
         profile = self._load_base_profile(customer_inn=customer_inn, customer_region=customer_region)
         profile["user_id"] = user_id
-        profile["customer_inn"] = customer_inn or ""
+        if str(profile.get("entity_type") or "customer") == "supplier":
+            profile["supplier_inn"] = customer_inn or ""
+        else:
+            profile["customer_inn"] = customer_inn or ""
         if customer_region:
             profile["customer_region"] = customer_region
         archetype, archetype_scores = self._infer_profile_archetype(profile)
-        profile["institution_archetype"] = archetype
-        profile["institution_archetype_scores"] = archetype_scores
+        if str(profile.get("entity_type") or "customer") == "customer":
+            profile["institution_archetype"] = archetype
+            profile["institution_archetype_scores"] = archetype_scores
+        else:
+            profile["institution_archetype"] = "general"
+            profile["institution_archetype_scores"] = {}
         return profile
 
     def _new_profile_template(self, region: Optional[str]) -> Dict[str, object]:
         return {
             "user_id": "UNKNOWN",
+            "entity_type": "anonymous",
             "customer_inn": "",
+            "supplier_inn": "",
             "customer_region": region or "UNKNOWN",
             "total_purchases": 0,
             "total_amount": 0.0,
@@ -342,6 +401,39 @@ class PersonalizationRuntimeService:
             "institution_archetype_scores": {},
         }
 
+    def _has_rows(self, query: str, params: tuple[object, ...]) -> bool:
+        try:
+            row = self.conn.execute(query, params).fetchone()
+        except sqlite3.OperationalError:
+            return False
+        return bool(row)
+
+    def _detect_entity_type(self, inn: Optional[str]) -> str:
+        normalized_inn = str(inn or "").strip()
+        if not normalized_inn:
+            return "unknown"
+
+        customer_exists = any(
+            (
+                self._has_rows("SELECT 1 FROM customer_category_stats WHERE customer_inn = ? LIMIT 1", (normalized_inn,)),
+                self._has_rows("SELECT 1 FROM customer_ste_stats WHERE customer_inn = ? LIMIT 1", (normalized_inn,)),
+                self._has_rows("SELECT 1 FROM customer_region_lookup WHERE customer_inn = ? LIMIT 1", (normalized_inn,)),
+            )
+        )
+        if customer_exists:
+            return "customer"
+
+        supplier_exists = any(
+            (
+                self._has_rows("SELECT 1 FROM supplier_category_stats WHERE supplier_inn = ? LIMIT 1", (normalized_inn,)),
+                self._has_rows("SELECT 1 FROM supplier_ste_stats WHERE supplier_inn = ? LIMIT 1", (normalized_inn,)),
+                self._has_rows("SELECT 1 FROM supplier_region_lookup WHERE supplier_inn = ? LIMIT 1", (normalized_inn,)),
+            )
+        )
+        if supplier_exists:
+            return "supplier"
+        return "unknown"
+
     def _load_base_profile(
         self,
         *,
@@ -351,9 +443,10 @@ class PersonalizationRuntimeService:
         if not customer_inn:
             return self._new_profile_template(region=customer_region)
 
+        entity_type = self._detect_entity_type(customer_inn)
         cache_key = None
         if self.cache_service and self.cache_service.enabled:
-            cache_key = self.cache_service.build_key("user-profile", suffix=str(customer_inn))
+            cache_key = self.cache_service.build_key("user-profile", suffix=f"{entity_type}:{customer_inn}")
             cached_profile = self.cache_service.get_json(cache_key)
             if isinstance(cached_profile, dict):
                 profile = copy.deepcopy(cached_profile)
@@ -361,9 +454,19 @@ class PersonalizationRuntimeService:
                     profile["customer_region"] = customer_region
                 return profile
 
-        region = customer_region or self._infer_customer_region(customer_inn)
+        if entity_type == "supplier":
+            region = customer_region or self._infer_supplier_region(customer_inn)
+        else:
+            region = customer_region or self._infer_customer_region(customer_inn)
         profile = self._new_profile_template(region=region)
-        self._fill_profile_from_history(profile=profile, customer_inn=customer_inn)
+        if entity_type == "supplier":
+            profile["entity_type"] = "supplier"
+            profile["supplier_inn"] = str(customer_inn or "")
+            self._fill_profile_from_supplier_history(profile=profile, supplier_inn=str(customer_inn or ""))
+        else:
+            profile["entity_type"] = "customer"
+            profile["customer_inn"] = str(customer_inn or "")
+            self._fill_profile_from_history(profile=profile, customer_inn=customer_inn)
 
         if cache_key and self.cache_service:
             self.cache_service.set_json(cache_key, profile, ttl_seconds=self.base_profile_ttl_seconds)
@@ -397,17 +500,21 @@ class PersonalizationRuntimeService:
         seasonal_category_stats = self._load_seasonal_category_stats(normalized_categories, month=reference_date.month)
         category_price_bands = self._load_category_price_bands(normalized_categories)
         dominant_category = self._dominant_category(user_profile)
-        similar_customer_stats = self._load_similar_customer_ste_stats(
-            ste_ids=ste_ids,
-            customer_region="",
-            normalized_category=dominant_category,
-        )
-        same_type_customer_stats = self._load_same_type_customer_ste_stats(
-            ste_ids=ste_ids,
-            customer_region=customer_region,
-            archetype=str(user_profile.get("institution_archetype") or "general"),
-            exclude_customer_inn=str(user_profile.get("customer_inn") or ""),
-        )
+        if str(user_profile.get("entity_type") or "customer") == "customer":
+            similar_customer_stats = self._load_similar_customer_ste_stats(
+                ste_ids=ste_ids,
+                customer_region="",
+                normalized_category=dominant_category,
+            )
+            same_type_customer_stats = self._load_same_type_customer_ste_stats(
+                ste_ids=ste_ids,
+                customer_region=customer_region,
+                archetype=str(user_profile.get("institution_archetype") or "general"),
+                exclude_customer_inn=str(user_profile.get("customer_inn") or ""),
+            )
+        else:
+            similar_customer_stats = {}
+            same_type_customer_stats = {}
 
         enriched: List[Dict[str, object]] = []
         for candidate in candidates:
@@ -573,6 +680,117 @@ class PersonalizationRuntimeService:
         profile["recent_purchase_dates"] = recent_purchase_dates[:180]
         profile["recent_category_dates"] = recent_category_dates
 
+    def _fill_profile_from_supplier_history(self, *, profile: Dict[str, object], supplier_inn: str) -> None:
+        ste_rows = self.conn.execute(
+            """
+            SELECT
+                ss.ste_id,
+                cl.category,
+                cl.normalized_category,
+                ss.purchase_count,
+                ss.total_amount,
+                ss.first_purchase_dt,
+                ss.last_purchase_dt,
+                COALESCE(sol.min_price, sol.avg_price, 0.0) AS price_proxy
+            FROM supplier_ste_stats ss
+            JOIN category_lookup cl ON cl.category_id = ss.category_id
+            LEFT JOIN ste_offer_lookup sol ON sol.ste_id = ss.ste_id
+            WHERE ss.supplier_inn = ?
+            ORDER BY ss.last_purchase_dt DESC
+            """,
+            (supplier_inn,),
+        ).fetchall()
+        category_rows = self.conn.execute(
+            """
+            SELECT
+                cl.category,
+                cl.normalized_category,
+                sc.purchase_count,
+                sc.total_amount,
+                sc.first_purchase_dt,
+                sc.last_purchase_dt
+            FROM supplier_category_stats sc
+            JOIN category_lookup cl ON cl.category_id = sc.category_id
+            WHERE sc.supplier_inn = ?
+            ORDER BY sc.last_purchase_dt DESC
+            """,
+            (supplier_inn,),
+        ).fetchall()
+
+        total_purchases = 0
+        total_amount = 0.0
+        recent_amounts: List[float] = []
+        recent_purchase_dates: List[str] = []
+        category_counts: Dict[str, int] = {}
+        ste_counts: Dict[str, int] = {}
+        supplier_counts: Dict[str, int] = {}
+        item_kind_counts: Dict[str, int] = {}
+        last_category_purchase_dt: Dict[str, str] = {}
+        last_ste_purchase_dt: Dict[str, str] = {}
+        last_supplier_purchase_dt: Dict[str, str] = {}
+        last_item_kind_purchase_dt: Dict[str, str] = {}
+        recent_category_dates: Dict[str, List[str]] = {}
+        last_purchase_dt: Optional[str] = None
+
+        for row in ste_rows:
+            ste_id = str(row["ste_id"])
+            category = str(row["category"])
+            item_kind = derive_item_kind("", category)
+            purchase_count = int(row["purchase_count"] or 0)
+            total_purchases += purchase_count
+            total_amount += float(row["total_amount"] or 0.0)
+            ste_counts[ste_id] = purchase_count
+            item_kind_counts[item_kind] = item_kind_counts.get(item_kind, 0) + purchase_count
+
+            last_dt = str(row["last_purchase_dt"] or "")
+            if last_dt:
+                last_ste_purchase_dt[ste_id] = last_dt
+                last_purchase_dt = max(filter(None, [last_purchase_dt, last_dt])) if last_purchase_dt else last_dt
+                last_supplier_purchase_dt[supplier_inn] = max(
+                    last_dt,
+                    str(last_supplier_purchase_dt.get(supplier_inn) or ""),
+                ).strip()
+                existing_item_kind_dt = last_item_kind_purchase_dt.get(item_kind)
+                if not existing_item_kind_dt or last_dt > existing_item_kind_dt:
+                    last_item_kind_purchase_dt[item_kind] = last_dt
+                for _ in range(min(purchase_count, 5)):
+                    if len(recent_purchase_dates) >= 180:
+                        break
+                    recent_purchase_dates.append(last_dt)
+
+            average_amount = float(row["total_amount"] or 0.0) / purchase_count if purchase_count else 0.0
+            for _ in range(min(purchase_count, 5)):
+                if len(recent_amounts) >= 180:
+                    break
+                recent_amounts.append(round(average_amount, 4))
+
+        for row in category_rows:
+            category = str(row["category"])
+            purchase_count = int(row["purchase_count"] or 0)
+            category_counts[category] = purchase_count
+            last_dt = str(row["last_purchase_dt"] or "")
+            if last_dt:
+                last_category_purchase_dt[category] = last_dt
+                recent_category_dates[category] = [last_dt for _ in range(min(purchase_count, 5))]
+
+        if total_purchases > 0:
+            supplier_counts[supplier_inn] = total_purchases
+
+        profile["total_purchases"] = total_purchases
+        profile["total_amount"] = round(total_amount, 4)
+        profile["recent_amounts"] = recent_amounts[:180]
+        profile["category_counts"] = category_counts
+        profile["ste_counts"] = ste_counts
+        profile["supplier_counts"] = supplier_counts
+        profile["item_kind_counts"] = item_kind_counts
+        profile["last_purchase_dt"] = last_purchase_dt
+        profile["last_category_purchase_dt"] = last_category_purchase_dt
+        profile["last_ste_purchase_dt"] = last_ste_purchase_dt
+        profile["last_supplier_purchase_dt"] = last_supplier_purchase_dt
+        profile["last_item_kind_purchase_dt"] = last_item_kind_purchase_dt
+        profile["recent_purchase_dates"] = recent_purchase_dates[:180]
+        profile["recent_category_dates"] = recent_category_dates
+
     def _apply_session_categories(
         self,
         *,
@@ -631,6 +849,23 @@ class PersonalizationRuntimeService:
         except sqlite3.OperationalError:
             return None
         return str(row["customer_region"]) if row and row["customer_region"] else None
+
+    def _infer_supplier_region(self, supplier_inn: Optional[str]) -> Optional[str]:
+        if not supplier_inn:
+            return None
+        try:
+            row = self.conn.execute(
+                """
+                SELECT supplier_region
+                FROM supplier_region_lookup
+                WHERE supplier_inn = ?
+                LIMIT 1
+                """,
+                (supplier_inn,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        return str(row["supplier_region"]) if row and row["supplier_region"] else None
 
     def _load_offer_lookup(self, ste_ids: List[str]) -> Dict[str, Dict[str, object]]:
         if not ste_ids:

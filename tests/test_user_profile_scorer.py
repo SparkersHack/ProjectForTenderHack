@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import sqlite3
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -14,6 +16,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from tenderhack.user_profile_scorer import (
     InMemoryUserHistoryRepository,
+    SQLiteUserHistoryRepository,
     UserProfileScorer,
     apply_personalization,
 )
@@ -112,6 +115,105 @@ class UserProfileScorerTests(unittest.TestCase):
         weights = scorer.compute_category_weights("user-empty")
 
         self.assertEqual(weights, {})
+
+    def test_sqlite_repository_falls_back_to_supplier_history(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "supplier-history.sqlite"
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            try:
+                conn.executescript(
+                    """
+                    CREATE TABLE category_lookup (
+                        category_id INTEGER PRIMARY KEY,
+                        category TEXT NOT NULL,
+                        normalized_category TEXT NOT NULL
+                    );
+
+                    CREATE TABLE customer_category_stats (
+                        customer_inn TEXT NOT NULL,
+                        category_id INTEGER NOT NULL,
+                        purchase_count INTEGER NOT NULL,
+                        total_amount REAL NOT NULL,
+                        first_purchase_dt TEXT,
+                        last_purchase_dt TEXT,
+                        PRIMARY KEY (customer_inn, category_id)
+                    );
+
+                    CREATE TABLE customer_ste_stats (
+                        customer_inn TEXT NOT NULL,
+                        ste_id TEXT NOT NULL,
+                        category_id INTEGER NOT NULL,
+                        purchase_count INTEGER NOT NULL,
+                        total_amount REAL NOT NULL,
+                        first_purchase_dt TEXT,
+                        last_purchase_dt TEXT,
+                        PRIMARY KEY (customer_inn, ste_id)
+                    );
+
+                    CREATE TABLE supplier_category_stats (
+                        supplier_inn TEXT NOT NULL,
+                        category_id INTEGER NOT NULL,
+                        purchase_count INTEGER NOT NULL,
+                        total_amount REAL NOT NULL,
+                        first_purchase_dt TEXT,
+                        last_purchase_dt TEXT,
+                        PRIMARY KEY (supplier_inn, category_id)
+                    );
+
+                    CREATE TABLE supplier_ste_stats (
+                        supplier_inn TEXT NOT NULL,
+                        ste_id TEXT NOT NULL,
+                        category_id INTEGER NOT NULL,
+                        purchase_count INTEGER NOT NULL,
+                        total_amount REAL NOT NULL,
+                        first_purchase_dt TEXT,
+                        last_purchase_dt TEXT,
+                        PRIMARY KEY (supplier_inn, ste_id)
+                    );
+                    """
+                )
+                conn.executemany(
+                    "INSERT INTO category_lookup (category_id, category, normalized_category) VALUES (?, ?, ?)",
+                    [
+                        (1, "Ручки канцелярские", "ручки канцелярские"),
+                        (2, "Бумага офисная", "бумага офисная"),
+                    ],
+                )
+                conn.executemany(
+                    """
+                    INSERT INTO supplier_category_stats (
+                        supplier_inn, category_id, purchase_count, total_amount, first_purchase_dt, last_purchase_dt
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        ("supp-1", 1, 5, 1000.0, "2024-01-01", "2025-01-01"),
+                        ("supp-1", 2, 1, 200.0, "2024-01-01", "2024-02-01"),
+                    ],
+                )
+                conn.executemany(
+                    """
+                    INSERT INTO supplier_ste_stats (
+                        supplier_inn, ste_id, category_id, purchase_count, total_amount, first_purchase_dt, last_purchase_dt
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        ("supp-1", "ste-repeat", 1, 4, 800.0, "2024-01-01", "2025-01-01"),
+                        ("supp-1", "ste-one-off", 2, 1, 200.0, "2024-01-01", "2024-02-01"),
+                    ],
+                )
+                conn.commit()
+
+                scorer = UserProfileScorer(SQLiteUserHistoryRepository(conn))
+                category_weights = scorer.compute_category_weights("supp-1")
+                ste_weights = scorer.compute_ste_weights("supp-1")
+
+                self.assertGreater(category_weights["ручки канцелярские"], 0.0)
+                self.assertEqual(category_weights["бумага офисная"], 0.0)
+                self.assertGreater(ste_weights["ste-repeat"], 0.0)
+                self.assertEqual(ste_weights["ste-one-off"], 0.0)
+            finally:
+                conn.close()
 
 
 if __name__ == "__main__":

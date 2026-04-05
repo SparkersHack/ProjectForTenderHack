@@ -16,6 +16,7 @@ export interface User {
     id: string;
     inn: string;
     region: string;
+    entityType?: string | null;
     customerName?: string | null;
     organizationTypeCode?: string | null;
     organizationTypeLabel?: string | null;

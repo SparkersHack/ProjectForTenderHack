@@ -1,11 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useStore } from '../../store/store';
-import { User as UserIcon, LogOut, ChevronDown, ShoppingCart } from 'lucide-react';
+import { User as UserIcon, LogOut, ChevronDown, Heart, ShoppingCart } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import Cart from '../Cart';
 import portalSuppliersLogo from '../../assets/portal-suppliers-logo.jpeg';
 
 const ORGANIZATION_TYPE_DETAILS: Record<string, { title: string; scope: string }> = {
+    supplier: {
+        title: 'У этого ИНН открыт профиль поставщика.',
+        scope: 'Поиск и персонализация строятся по истории поставок, категориям и товарам этого поставщика.',
+    },
     healthcare: {
         title: 'Подходит для медицинских учреждений и служб здравоохранения.',
         scope: 'Больницы, поликлиники, диспансеры, амбулатории, аптеки и другие медорганизации.',
@@ -33,7 +37,7 @@ const ORGANIZATION_TYPE_DETAILS: Record<string, { title: string; scope: string }
 };
 
 const Layout = ({ children }: { children: React.ReactNode }) => {
-    const { user, logout, cartProducts } = useStore();
+    const { user, logout, cartProducts, favoriteProducts } = useStore();
     const navigate = useNavigate();
     const [isProfileOpen, setIsProfileOpen] = useState(false);
     const [isCartOpen, setIsCartOpen] = useState(false);
@@ -66,11 +70,23 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
     const hasHiddenFrequentProducts = frequentProducts.length > visibleFrequentProductsCount;
     const canCollapseFrequentProducts =
         frequentProducts.length > 6 && visibleFrequentProductsCount >= frequentProducts.length;
+    const entityType = user?.entityType?.trim() || 'customer';
+    const isSupplier = entityType === 'supplier';
     const organizationTypeCode = user?.organizationTypeCode?.trim() || 'general';
     const organizationTypeLabel = user?.organizationTypeLabel?.trim() || 'Общий профиль';
     const organizationTypeSource = user?.organizationTypeSource?.trim() || 'По истории закупок';
-    const customerName = user?.customerName?.trim() || `ИНН ${user?.inn ?? ''}`;
+    const entityName = user?.customerName?.trim() || `ИНН ${user?.inn ?? ''}`;
     const organizationTypeDetails = ORGANIZATION_TYPE_DETAILS[organizationTypeCode] ?? ORGANIZATION_TYPE_DETAILS.general;
+    const profileTitle = isSupplier ? 'Профиль поставщика' : 'Профиль заказчика';
+    const entityBadgeLabel = isSupplier ? 'Поставщик' : 'Заказчик';
+    const historyLabel = isSupplier
+        ? `Персонализация поиска строится по истории поставщика с ИНН ${user?.inn}`
+        : `Персонализация поиска строится по истории ИНН ${user?.inn}`;
+    const profileKindTitle = isSupplier ? 'Тип профиля' : 'Тип организации';
+    const topCategoriesTitle = isSupplier ? 'Топ-категории поставщика' : 'Топ-категории';
+    const frequentProductsTitle = isSupplier ? 'Часто поставлялось' : 'Часто закупалось';
+    const savedItemsCount = isSupplier ? favoriteProducts.length : cartProducts.length;
+    const savedItemsTitle = isSupplier ? 'Избранное' : 'Корзина';
 
     return (
         <div className="min-h-screen bg-[#f6f7f9] font-sans text-gray-900 flex flex-col">
@@ -100,8 +116,11 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                                         className="flex items-center gap-3 rounded-[2px] border border-[#e6e8ec] bg-white px-4 py-2.5 hover:border-[#d9dde3] transition-colors"
                                     >
                                         <div className="text-sm text-right hidden md:block">
-                                            <div className="font-semibold text-gray-900">
-                                                Профиль заказчика / ИНН {user.inn}
+                                            <div className="flex items-center justify-end gap-2 font-semibold text-gray-900">
+                                                <span>{profileTitle} / ИНН {user.inn}</span>
+                                                <span className="inline-flex items-center rounded-full border border-[#ffe0db] bg-[#fff3ef] px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#ba4b2a]">
+                                                    {entityBadgeLabel}
+                                                </span>
                                             </div>
                                             <div className="text-xs text-gray-500">
                                                 {user.region || 'Регион не определён'}
@@ -119,25 +138,35 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                                     {isProfileOpen && (
                                         <div className="absolute right-0 mt-3 w-[420px] max-w-[calc(100vw-32px)] max-h-[min(78vh,680px)] bg-white border border-gray-200 rounded-[8px] shadow-xl p-5 z-50 overflow-y-auto">
                                             <div className="mb-5">
-                                                <div className="text-sm font-semibold text-gray-900">
-                                                    Профиль заказчика
+                                                <div className="flex items-center gap-2">
+                                                    <div className="text-sm font-semibold text-gray-900">
+                                                        {profileTitle}
+                                                    </div>
+                                                    <span className="inline-flex items-center rounded-full border border-[#ffe0db] bg-[#fff3ef] px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#ba4b2a]">
+                                                        {entityBadgeLabel}
+                                                    </span>
                                                 </div>
                                                 <div className="text-xs text-gray-500 mt-1">
-                                                    Персонализация поиска строится по истории ИНН {user.inn}
+                                                    {historyLabel}
                                                 </div>
                                             </div>
 
                                             <div className="mb-5 rounded-[10px] border border-[#e6ebf0] bg-[#f8fafc] p-4">
                                                 <div className="text-xs uppercase tracking-wide text-gray-400 mb-2">
-                                                    Тип организации
+                                                    {profileKindTitle}
                                                 </div>
                                                 <div className="text-sm font-semibold text-gray-900 leading-snug">
-                                                    {customerName}
+                                                    {entityName}
                                                 </div>
                                                 <div className="mt-3 flex flex-wrap gap-2">
-                                                    <span className="inline-flex items-center rounded-full border border-[#d7e3f8] bg-[#eef5ff] px-3 py-1 text-sm font-semibold text-[#2f5e9b]">
-                                                        {organizationTypeLabel}
+                                                    <span className="inline-flex items-center rounded-full border border-[#ffe0db] bg-[#fff3ef] px-3 py-1 text-sm font-semibold text-[#ba4b2a]">
+                                                        {entityBadgeLabel}
                                                     </span>
+                                                    {!isSupplier && (
+                                                        <span className="inline-flex items-center rounded-full border border-[#d7e3f8] bg-[#eef5ff] px-3 py-1 text-sm font-semibold text-[#2f5e9b]">
+                                                            {organizationTypeLabel}
+                                                        </span>
+                                                    )}
                                                     <span className="inline-flex items-center rounded-full border border-[#ebeef2] bg-white px-3 py-1 text-sm text-[#556070]">
                                                         {user.region || 'Регион не определён'}
                                                     </span>
@@ -160,7 +189,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
 
                                             <div className="mb-5">
                                                 <div className="text-xs uppercase tracking-wide text-gray-400 mb-2">
-                                                    Топ-категории
+                                                    {topCategoriesTitle}
                                                 </div>
                                                 <div className="flex flex-wrap gap-2">
                                                     {(user.topCategories ?? []).slice(0, 5).map((item) => (
@@ -180,7 +209,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
 
                                             <div>
                                                 <div className="text-xs uppercase tracking-wide text-gray-400 mb-2">
-                                                    Часто закупалось
+                                                    {frequentProductsTitle}
                                                 </div>
                                                 <div className="space-y-3 pr-1">
                                                     {frequentProducts.slice(0, visibleFrequentProductsCount).map((item) => (
@@ -199,7 +228,9 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                                                     ))}
                                                     {frequentProducts.length === 0 && (
                                                         <div className="text-sm text-gray-500">
-                                                            История закупок для этого ИНН пока не найдена.
+                                                            {isSupplier
+                                                                ? 'История поставок для этого ИНН пока не найдена.'
+                                                                : 'История закупок для этого ИНН пока не найдена.'}
                                                         </div>
                                                     )}
                                                     {hasHiddenFrequentProducts && (
@@ -230,17 +261,17 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                                     )}
                                 </div>
 
-                                {/* Cart button */}
+                                {/* Saved items button */}
                                 <button
                                     type="button"
                                     onClick={() => setIsCartOpen(true)}
                                     className="relative p-2.5 text-gray-600 hover:text-[#d63d2b] transition-colors"
-                                    title="Корзина"
+                                    title={savedItemsTitle}
                                 >
-                                    <ShoppingCart size={24} />
-                                    {cartProducts.length > 0 && (
+                                    {isSupplier ? <Heart size={24} /> : <ShoppingCart size={24} />}
+                                    {savedItemsCount > 0 && (
                                         <span className="absolute -top-0.5 -right-0.5 bg-[#d63d2b] text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full border-2 border-white shadow-sm">
-                                            {cartProducts.length}
+                                            {savedItemsCount}
                                         </span>
                                     )}
                                 </button>

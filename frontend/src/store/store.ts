@@ -13,6 +13,7 @@ interface StoreState {
   productOpenTimes: Record<string, number>; // productId -> timestamp of opening
   cartCloseGraceProductIds: Record<string, boolean>;
   cartProducts: Product[];
+  favoriteProducts: Product[];
 
   // Search Context
   searchQuery: string;
@@ -40,6 +41,9 @@ interface StoreState {
   addToCart: (product: Product) => void;
   removeFromCart: (productId: string) => void;
   clearCart: () => void;
+  addToFavorites: (product: Product) => void;
+  removeFromFavorites: (productId: string) => void;
+  clearFavorites: () => void;
 }
 
 const refreshCurrentSearch = async () => {
@@ -94,6 +98,7 @@ export const useStore = create<StoreState>((set, get) => ({
       productOpenTimes: {},
       cartCloseGraceProductIds: {},
       cartProducts: [],
+      favoriteProducts: [],
     }),
   logout: () =>
     set({
@@ -103,6 +108,7 @@ export const useStore = create<StoreState>((set, get) => ({
       productOpenTimes: {},
       cartCloseGraceProductIds: {},
       cartProducts: [],
+      favoriteProducts: [],
       results: [],
       searchQuery: '',
       suggestions: [],
@@ -117,6 +123,7 @@ export const useStore = create<StoreState>((set, get) => ({
   productOpenTimes: {},
   cartCloseGraceProductIds: {},
   cartProducts: [],
+  favoriteProducts: [],
 
   searchQuery: '',
   results: [],
@@ -327,4 +334,18 @@ export const useStore = create<StoreState>((set, get) => ({
     });
     set({ cartProducts: [] });
   },
+
+  addToFavorites: (product) =>
+    set((state) => ({
+      favoriteProducts: state.favoriteProducts.some((item) => item.id === product.id)
+        ? state.favoriteProducts
+        : [...state.favoriteProducts, product],
+    })),
+
+  removeFromFavorites: (productId) =>
+    set((state) => ({
+      favoriteProducts: state.favoriteProducts.filter((item) => item.id !== productId),
+    })),
+
+  clearFavorites: () => set({ favoriteProducts: [] }),
 }));

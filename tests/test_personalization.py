@@ -51,6 +51,27 @@ class PersonalizationServiceTests(unittest.TestCase):
                     PRIMARY KEY (customer_inn, category_id)
                 );
 
+                CREATE TABLE supplier_ste_stats (
+                    supplier_inn TEXT NOT NULL,
+                    ste_id TEXT NOT NULL,
+                    category_id INTEGER NOT NULL,
+                    purchase_count INTEGER NOT NULL,
+                    total_amount REAL NOT NULL,
+                    first_purchase_dt TEXT,
+                    last_purchase_dt TEXT,
+                    PRIMARY KEY (supplier_inn, ste_id)
+                );
+
+                CREATE TABLE supplier_category_stats (
+                    supplier_inn TEXT NOT NULL,
+                    category_id INTEGER NOT NULL,
+                    purchase_count INTEGER NOT NULL,
+                    total_amount REAL NOT NULL,
+                    first_purchase_dt TEXT,
+                    last_purchase_dt TEXT,
+                    PRIMARY KEY (supplier_inn, category_id)
+                );
+
                 CREATE TABLE region_category_stats (
                     customer_region TEXT NOT NULL,
                     category_id INTEGER NOT NULL,
@@ -65,6 +86,22 @@ class PersonalizationServiceTests(unittest.TestCase):
                     customer_inn TEXT PRIMARY KEY,
                     customer_region TEXT NOT NULL,
                     frequency INTEGER NOT NULL
+                );
+
+                CREATE TABLE supplier_region_lookup (
+                    supplier_inn TEXT PRIMARY KEY,
+                    supplier_region TEXT NOT NULL,
+                    frequency INTEGER NOT NULL
+                );
+
+                CREATE TABLE customer_name_lookup (
+                    customer_inn TEXT PRIMARY KEY,
+                    customer_name TEXT NOT NULL
+                );
+
+                CREATE TABLE supplier_name_lookup (
+                    supplier_inn TEXT PRIMARY KEY,
+                    supplier_name TEXT NOT NULL
                 );
                 """
             )
@@ -114,6 +151,28 @@ class PersonalizationServiceTests(unittest.TestCase):
             )
             conn.executemany(
                 """
+                INSERT INTO supplier_category_stats (
+                    supplier_inn, category_id, purchase_count, total_amount, first_purchase_dt, last_purchase_dt
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    ("supp-1", 1, 14, 18000.0, "2024-01-01", "2025-03-10"),
+                    ("supp-1", 2, 5, 900.0, "2024-02-01", "2025-03-01"),
+                ],
+            )
+            conn.executemany(
+                """
+                INSERT INTO supplier_ste_stats (
+                    supplier_inn, ste_id, category_id, purchase_count, total_amount, first_purchase_dt, last_purchase_dt
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    ("supp-1", "ste-immune-1", 1, 12, 15600.0, "2024-01-01", "2025-03-10"),
+                    ("supp-1", "ste-pen-1", 2, 5, 900.0, "2024-02-01", "2025-03-01"),
+                ],
+            )
+            conn.executemany(
+                """
                 INSERT INTO region_category_stats (
                     customer_region, category_id, purchase_count, total_amount, first_purchase_dt, last_purchase_dt
                 ) VALUES (?, ?, ?, ?, ?, ?)
@@ -135,6 +194,24 @@ class PersonalizationServiceTests(unittest.TestCase):
                     ("cust-4", "Казань", 4),
                     ("cust-sparse", "Санкт-Петербург", 2),
                 ],
+            )
+            conn.execute(
+                "INSERT INTO supplier_region_lookup (supplier_inn, supplier_region, frequency) VALUES (?, ?, ?)",
+                ("supp-1", "Москва", 9),
+            )
+            conn.executemany(
+                "INSERT INTO customer_name_lookup (customer_inn, customer_name) VALUES (?, ?)",
+                [
+                    ("cust-1", "ГБУЗ Городская поликлиника № 1"),
+                    ("cust-2", "ГБУЗ Клиническая больница № 2"),
+                    ("cust-3", "ГБУЗ Диагностический центр № 3"),
+                    ("cust-4", "МБОУ Школа № 7"),
+                    ("cust-sparse", "ГБУЗ Детская поликлиника № 5"),
+                ],
+            )
+            conn.execute(
+                "INSERT INTO supplier_name_lookup (supplier_inn, supplier_name) VALUES (?, ?)",
+                ("supp-1", "Поставщик 1"),
             )
             conn.commit()
         finally:
@@ -204,6 +281,51 @@ class PersonalizationServiceTests(unittest.TestCase):
                 for item in recommended_ste
             )
         )
+
+    def test_build_profile_by_inn_returns_supplier_profile(self) -> None:
+        profile = self.service.build_profile_by_inn("supp-1")
+        self.assertEqual(profile["entity_type"], "supplier")
+        self.assertEqual(profile["supplier_inn"], "supp-1")
+        self.assertEqual(profile["customer_region"], "Москва")
+        self.assertEqual(profile["top_categories"][0]["category"], "ИММУНОДЕПРЕССАНТЫ,L04")
+        self.assertEqual(profile["top_ste"][0]["ste_id"], "ste-immune-1")
+        self.assertEqual(profile["recommended_ste"][0]["ste_id"], "ste-immune-1")
+
+    def test_supplier_name_context_uses_sqlite_lookup_without_scanning_contracts(self) -> None:
+        from unittest.mock import patch
+
+        with patch.object(
+            self.service,
+            "_ensure_customer_name_index_loaded",
+            side_effect=AssertionError("customer contracts scan should not run for supplier login"),
+        ):
+            payload = self.service.get_entity_name_context("supp-1")
+
+        self.assertEqual(payload["entity_type"], "supplier")
+        self.assertEqual(payload["customer_name"], "Поставщик 1")
+        self.assertEqual(payload["institution_name_archetype_label"], "Поставщик")
+
+    def test_customer_name_context_uses_sqlite_lookup_without_scanning_contracts(self) -> None:
+        from unittest.mock import patch
+
+        with patch.object(
+            self.service,
+            "_infer_csv_delimiter",
+            side_effect=AssertionError("contracts csv scan should not run when customer_name_lookup is available"),
+        ):
+            payload = self.service.get_customer_name_context("cust-1")
+
+        self.assertEqual(payload["customer_name"], "ГБУЗ Городская поликлиника № 1")
+        self.assertEqual(payload["institution_name_archetype"], "healthcare")
+
+    def test_customer_name_archetype_detects_healthcare_for_drug_supply_center(self) -> None:
+        archetype, signal_stems, scores = self.service._infer_customer_name_archetype(
+            "Государственное бюджетное учреждение здравоохранения города Москвы Центр лекарственного обеспечения Департамента здравоохранения города Москвы"
+        )
+
+        self.assertEqual(archetype, "healthcare")
+        self.assertTrue(signal_stems)
+        self.assertGreater(scores.get("healthcare", 0.0), scores.get("office_admin", 0.0))
 
     def test_rerank_ste_boosts_matching_history_and_category(self) -> None:
         profile = self.service.build_customer_profile("cust-1")

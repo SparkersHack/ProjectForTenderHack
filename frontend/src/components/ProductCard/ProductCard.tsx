@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Product } from '../../types';
 import { useStore } from '../../store/store';
-import { Check, ChevronDown, ShoppingCart, X } from 'lucide-react';
+import { Check, ChevronDown, Heart, ShoppingCart, X } from 'lucide-react';
 
 interface ProductCardProps {
     product: Product;
@@ -13,18 +13,34 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
     const [isCartFeedbackVisible, setIsCartFeedbackVisible] = useState(false);
     const isOpenRef = useRef(false);
     const wasInCartRef = useRef(false);
-    const { simulateProductOpen, simulateProductClose, addToCart, cartProducts } = useStore();
+    const {
+        user,
+        simulateProductOpen,
+        simulateProductClose,
+        addToCart,
+        cartProducts,
+        addToFavorites,
+        removeFromFavorites,
+        favoriteProducts,
+    } = useStore();
+    const isSupplier = (user?.entityType?.trim() || '') === 'supplier';
     const isInCart = cartProducts.some((item) => item.id === product.id);
+    const isInFavorites = favoriteProducts.some((item) => item.id === product.id);
+    const isSelected = isSupplier ? isInFavorites : isInCart;
+    const addActionLabel = isSupplier ? 'Добавить в избранное' : 'Добавить в корзину';
+    const selectedActionLabel = isSupplier ? 'Уже в избранном' : 'Уже в корзине';
+    const selectedFeedbackLabel = isSupplier ? 'Добавлено в избранное' : 'Добавлено в корзину';
+    const selectedSteadyLabel = isSupplier ? 'В избранном' : 'Уже в корзине';
 
     useEffect(() => {
-        if (isInCart && !wasInCartRef.current) {
+        if (isSelected && !wasInCartRef.current) {
             setIsCartFeedbackVisible(true);
         }
-        if (!isInCart) {
+        if (!isSelected) {
             setIsCartFeedbackVisible(false);
         }
-        wasInCartRef.current = isInCart;
-    }, [isInCart]);
+        wasInCartRef.current = isSelected;
+    }, [isSelected]);
 
     useEffect(() => {
         if (!isCartFeedbackVisible) {
@@ -39,8 +55,16 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
         simulateProductOpen(product.id, product.category);
     };
 
-    const handleAddToCart = (e: React.MouseEvent) => {
+    const handlePrimaryAction = (e: React.MouseEvent) => {
         e.stopPropagation();
+        if (isSupplier) {
+            if (isInFavorites) {
+                removeFromFavorites(product.id);
+                return;
+            }
+            addToFavorites(product);
+            return;
+        }
         addToCart(product);
     };
 
@@ -78,7 +102,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
             <div 
                 onClick={handleOpen}
                 className={`bg-white border shadow-[0_8px_24px_rgba(15,23,42,0.05)] hover:shadow-[0_14px_32px_rgba(15,23,42,0.08)] transition-all cursor-pointer relative h-full flex flex-col group ${
-                    isInCart ? 'border-[#c7efd2]' : 'border-[#e6e8ec]'
+                    isSelected ? 'border-[#c7efd2]' : 'border-[#e6e8ec]'
                 } ${
                     isCartFeedbackVisible ? 'ring-2 ring-[#86efac] shadow-[0_18px_36px_rgba(34,197,94,0.16)]' : ''
                 }`}
@@ -135,18 +159,22 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                             </div>
                             <button
                                 type="button"
-                                onClick={handleAddToCart}
+                                onClick={handlePrimaryAction}
                                 className={`flex-shrink-0 rounded-[2px] border p-2 transition-all ${
-                                    isInCart
+                                    isSelected
                                         ? 'border-[#8dd7a5] bg-[#ecfdf3] text-[#16723e]'
                                         : 'border-[#d63d2b] text-[#d63d2b] hover:bg-[#fdf2f1]'
                                 } ${isCartFeedbackVisible ? 'animate-pulse' : ''}`}
-                                title={isInCart ? 'Товар уже в корзине' : 'Добавить в корзину'}
+                                title={isSelected ? selectedActionLabel : addActionLabel}
                             >
-                                {isInCart ? <Check size={18} /> : <ShoppingCart size={18} />}
+                                {isSelected ? (
+                                    isSupplier ? <Heart size={18} className="fill-current" /> : <Check size={18} />
+                                ) : (
+                                    isSupplier ? <Heart size={18} /> : <ShoppingCart size={18} />
+                                )}
                             </button>
                         </div>
-                        {isInCart && (
+                        {isSelected && (
                             <div
                                 className={`mt-3 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${
                                     isCartFeedbackVisible
@@ -154,8 +182,8 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                                         : 'border-[#d6eadb] bg-[#f4fbf6] text-[#2e6d46]'
                                 }`}
                             >
-                                <Check size={12} />
-                                {isCartFeedbackVisible ? 'Добавлено в корзину' : 'Уже в корзине'}
+                                {isSupplier ? <Heart size={12} className="fill-current" /> : <Check size={12} />}
+                                {isCartFeedbackVisible ? selectedFeedbackLabel : selectedSteadyLabel}
                             </div>
                         )}
                     </div>
@@ -208,15 +236,19 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                                 </div>
                                 <button
                                     type="button"
-                                    onClick={handleAddToCart}
+                                    onClick={handlePrimaryAction}
                                     className={`inline-flex items-center gap-2 px-5 py-3 font-semibold transition-all ${
-                                        isInCart
+                                        isSelected
                                             ? 'bg-[#15803d] text-white shadow-[0_12px_24px_rgba(34,197,94,0.24)]'
                                             : 'bg-[#da291c] hover:bg-[#bf2418] text-white'
                                     } ${isCartFeedbackVisible ? 'animate-pulse' : ''}`}
                                 >
-                                    {isInCart ? <Check size={18} /> : <ShoppingCart size={18} />}
-                                    {isInCart ? 'Уже в корзине' : 'Добавить в корзину'}
+                                    {isSelected ? (
+                                        isSupplier ? <Heart size={18} className="fill-current" /> : <Check size={18} />
+                                    ) : (
+                                        isSupplier ? <Heart size={18} /> : <ShoppingCart size={18} />
+                                    )}
+                                    {isSelected ? selectedSteadyLabel : addActionLabel}
                                 </button>
                             </div>
                         </div>

@@ -124,6 +124,8 @@ CUSTOMER_NAME_ARCHETYPE_KEYWORDS = {
         "обуз",
         "больница",
         "поликлиника",
+        "здравоохранения",
+        "здравоохранение",
         "клиническая",
         "госпиталь",
         "диспансер",
@@ -133,10 +135,17 @@ CUSTOMER_NAME_ARCHETYPE_KEYWORDS = {
         "санаторий",
         "медицинский",
         "медико",
+        "диагностический",
         "стоматологическая",
         "амбулатория",
         "фельдшерский",
         "аптека",
+        "лекарственного",
+        "лекарственное",
+        "лекарственных",
+        "фармацевтический",
+        "фармацевтическая",
+        "фармацевтического",
     },
     "education": {
         "гбоу",
@@ -229,13 +238,80 @@ class PersonalizationService:
         self.contracts_path = Path(contracts_path) if contracts_path else None
         self._archetype_category_ids_cache: Dict[str, List[int]] = {}
         self._customer_name_index_loaded = False
+        self._entity_type_cache: Dict[str, str] = {}
         self._customer_name_by_inn: Dict[str, str] = {}
         self._customer_name_archetype_by_inn: Dict[str, str] = {}
         self._customer_name_signal_stems_by_inn: Dict[str, set[str]] = {}
         self._customer_name_archetype_scores_by_inn: Dict[str, Dict[str, float]] = {}
+        self._supplier_name_by_inn: Dict[str, str] = {}
 
     def close(self) -> None:
         self.conn.close()
+
+    def _has_rows(self, query: str, params: tuple[object, ...]) -> bool:
+        try:
+            row = self.conn.execute(query, params).fetchone()
+        except sqlite3.OperationalError:
+            return False
+        return bool(row)
+
+    def detect_entity_type(self, inn: str) -> str:
+        inn = str(inn or "").strip()
+        if not inn:
+            return "unknown"
+        cached = self._entity_type_cache.get(inn)
+        if cached:
+            return cached
+
+        customer_exists = any(
+            (
+                self._has_rows("SELECT 1 FROM customer_category_stats WHERE customer_inn = ? LIMIT 1", (inn,)),
+                self._has_rows("SELECT 1 FROM customer_ste_stats WHERE customer_inn = ? LIMIT 1", (inn,)),
+                self._has_rows("SELECT 1 FROM customer_region_lookup WHERE customer_inn = ? LIMIT 1", (inn,)),
+            )
+        )
+        if customer_exists:
+            self._entity_type_cache[inn] = "customer"
+            return "customer"
+
+        supplier_exists = any(
+            (
+                self._has_rows("SELECT 1 FROM supplier_category_stats WHERE supplier_inn = ? LIMIT 1", (inn,)),
+                self._has_rows("SELECT 1 FROM supplier_ste_stats WHERE supplier_inn = ? LIMIT 1", (inn,)),
+                self._has_rows("SELECT 1 FROM supplier_region_lookup WHERE supplier_inn = ? LIMIT 1", (inn,)),
+            )
+        )
+        if supplier_exists:
+            self._entity_type_cache[inn] = "supplier"
+            return "supplier"
+
+        self._entity_type_cache[inn] = "unknown"
+        return "unknown"
+
+    def build_profile_by_inn(
+        self,
+        inn: str,
+        *,
+        region: Optional[str] = None,
+        top_categories: int = 12,
+        top_ste: int = 20,
+        top_region_categories: int = 12,
+    ) -> Dict[str, object]:
+        entity_type = self.detect_entity_type(inn)
+        if entity_type == "supplier":
+            return self.build_supplier_profile(
+                supplier_inn=inn,
+                supplier_region=region,
+                top_categories=top_categories,
+                top_ste=top_ste,
+            )
+        return self.build_customer_profile(
+            customer_inn=inn,
+            customer_region=region,
+            top_categories=top_categories,
+            top_ste=top_ste,
+            top_region_categories=top_region_categories,
+        )
 
     def build_customer_profile(
         self,
@@ -360,6 +436,7 @@ class PersonalizationService:
         )
 
         return {
+            "entity_type": "customer",
             "customer_inn": customer_inn,
             "customer_region": customer_region,
             "institution_archetype": institution_archetype,
@@ -383,6 +460,82 @@ class PersonalizationService:
             "regional_affinity": {item["normalized_category"]: item["weight"] for item in region_preferences},
         }
 
+    def build_supplier_profile(
+        self,
+        supplier_inn: str,
+        supplier_region: Optional[str] = None,
+        top_categories: int = 12,
+        top_ste: int = 20,
+    ) -> Dict[str, object]:
+        supplier_inn = str(supplier_inn)
+        supplier_region = supplier_region or self._infer_supplier_region(supplier_inn)
+
+        top_supplier_categories = self.conn.execute(
+            """
+            SELECT
+                sc.category_id,
+                cl.category,
+                cl.normalized_category,
+                sc.purchase_count,
+                sc.total_amount,
+                sc.first_purchase_dt,
+                sc.last_purchase_dt
+            FROM supplier_category_stats sc
+            JOIN category_lookup cl ON cl.category_id = sc.category_id
+            WHERE sc.supplier_inn = ?
+            ORDER BY sc.purchase_count DESC, sc.total_amount DESC
+            LIMIT ?
+            """,
+            (supplier_inn, top_categories),
+        ).fetchall()
+
+        top_supplier_ste = self.conn.execute(
+            """
+            SELECT
+                ss.ste_id,
+                ss.category_id,
+                cl.category,
+                cl.normalized_category,
+                ss.purchase_count,
+                ss.total_amount,
+                ss.first_purchase_dt,
+                ss.last_purchase_dt
+            FROM supplier_ste_stats ss
+            JOIN category_lookup cl ON cl.category_id = ss.category_id
+            WHERE ss.supplier_inn = ?
+            ORDER BY ss.purchase_count DESC, ss.total_amount DESC
+            LIMIT ?
+            """,
+            (supplier_inn, top_ste),
+        ).fetchall()
+
+        category_preferences = self._weight_category_rows(top_supplier_categories)
+        ste_preferences = self._weight_ste_rows(top_supplier_ste)
+
+        return {
+            "entity_type": "supplier",
+            "customer_inn": "",
+            "supplier_inn": supplier_inn,
+            "customer_region": supplier_region,
+            "supplier_region": supplier_region,
+            "institution_archetype": "general",
+            "institution_archetype_label": INSTITUTION_ARCHETYPE_LABELS["general"],
+            "institution_archetype_scores": {},
+            "top_categories": category_preferences,
+            "top_ste": ste_preferences,
+            "regional_categories": [],
+            "peer_categories": [],
+            "peer_ste": [],
+            "same_type_peer_inns": [],
+            "archetype_categories": [],
+            "archetype_ste": [],
+            "recommended_categories": category_preferences,
+            "recommended_ste": ste_preferences,
+            "category_affinity": {item["normalized_category"]: item["weight"] for item in category_preferences},
+            "ste_affinity": {item["ste_id"]: item["weight"] for item in ste_preferences},
+            "regional_affinity": {},
+        }
+
     def _infer_customer_region(self, customer_inn: str) -> Optional[str]:
         try:
             row = self.conn.execute(
@@ -397,6 +550,97 @@ class PersonalizationService:
         except sqlite3.OperationalError:
             return None
         return row["customer_region"] if row else None
+
+    def _infer_supplier_region(self, supplier_inn: str) -> Optional[str]:
+        try:
+            row = self.conn.execute(
+                """
+                SELECT supplier_region
+                FROM supplier_region_lookup
+                WHERE supplier_inn = ?
+                LIMIT 1
+                """,
+                (supplier_inn,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        return row["supplier_region"] if row else None
+
+    def _get_supplier_name(self, supplier_inn: str) -> str:
+        supplier_inn = str(supplier_inn or "").strip()
+        if not supplier_inn:
+            return ""
+        if supplier_inn in self._supplier_name_by_inn:
+            return self._supplier_name_by_inn[supplier_inn]
+
+        supplier_name = ""
+        try:
+            row = self.conn.execute(
+                """
+                SELECT supplier_name
+                FROM supplier_name_lookup
+                WHERE supplier_inn = ?
+                LIMIT 1
+                """,
+                (supplier_inn,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            row = None
+        if row:
+            supplier_name = str(row["supplier_name"] or "").strip()
+
+        self._supplier_name_by_inn[supplier_inn] = supplier_name
+        return supplier_name
+
+    def _load_name_lookup_index_from_sqlite(self) -> bool:
+        loaded = False
+        try:
+            rows = self.conn.execute(
+                """
+                SELECT customer_inn, customer_name
+                FROM customer_name_lookup
+                """
+            ).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+        for row in rows:
+            customer_inn = str(row["customer_inn"] or "").strip()
+            customer_name = str(row["customer_name"] or "").strip()
+            if not customer_inn or not customer_name:
+                continue
+            current_name = self._customer_name_by_inn.get(customer_inn, "")
+            if len(normalize_text(customer_name)) >= len(normalize_text(current_name)):
+                self._customer_name_by_inn[customer_inn] = customer_name
+                loaded = True
+
+        try:
+            rows = self.conn.execute(
+                """
+                SELECT supplier_inn, supplier_name
+                FROM supplier_name_lookup
+                """
+            ).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+        for row in rows:
+            supplier_inn = str(row["supplier_inn"] or "").strip()
+            supplier_name = str(row["supplier_name"] or "").strip()
+            if not supplier_inn or not supplier_name:
+                continue
+            current_name = self._supplier_name_by_inn.get(supplier_inn, "")
+            if len(normalize_text(supplier_name)) >= len(normalize_text(current_name)):
+                self._supplier_name_by_inn[supplier_inn] = supplier_name
+                loaded = True
+
+        if not self._customer_name_by_inn:
+            return loaded
+
+        for customer_inn, customer_name in self._customer_name_by_inn.items():
+            archetype, signal_stems, scores = self._infer_customer_name_archetype(customer_name)
+            self._customer_name_archetype_by_inn[customer_inn] = archetype
+            self._customer_name_signal_stems_by_inn[customer_inn] = signal_stems
+            self._customer_name_archetype_scores_by_inn[customer_inn] = scores
+        return loaded
 
     @staticmethod
     def _clean_contract_lookup_text(value: object) -> str:
@@ -418,6 +662,8 @@ class PersonalizationService:
             return
 
         self._customer_name_index_loaded = True
+        if self._load_name_lookup_index_from_sqlite():
+            return
         contracts_path = self.contracts_path
         if not contracts_path or not contracts_path.exists():
             return
@@ -431,6 +677,8 @@ class PersonalizationService:
                         continue
                     customer_inn = self._clean_contract_lookup_text(row[5])
                     customer_name = self._clean_contract_lookup_text(row[6])
+                    supplier_inn = self._clean_contract_lookup_text(row[8]) if len(row) > 8 else ""
+                    supplier_name = self._clean_contract_lookup_text(row[9]) if len(row) > 9 else ""
                     if (
                         not customer_inn
                         or not customer_name
@@ -442,6 +690,15 @@ class PersonalizationService:
                     current_name = self._customer_name_by_inn.get(customer_inn, "")
                     if len(normalize_text(customer_name)) >= len(normalize_text(current_name)):
                         self._customer_name_by_inn[customer_inn] = customer_name
+                    if (
+                        supplier_inn
+                        and supplier_name
+                        and supplier_inn.lower() != "supplier_inn"
+                        and normalize_text(supplier_name) != "supplier_name"
+                    ):
+                        current_supplier_name = self._supplier_name_by_inn.get(supplier_inn, "")
+                        if len(normalize_text(supplier_name)) >= len(normalize_text(current_supplier_name)):
+                            self._supplier_name_by_inn[supplier_inn] = supplier_name
         except OSError:
             return
 
@@ -526,6 +783,25 @@ class PersonalizationService:
             "name_signal_stems": sorted(signal_stems),
             "same_type_peer_inns": same_type_peer_inns,
         }
+
+    def get_entity_name_context(self, inn: str, *, limit: int = 120) -> Dict[str, object]:
+        entity_type = self.detect_entity_type(inn)
+        if entity_type == "supplier":
+            supplier_name = self._get_supplier_name(str(inn or ""))
+            return {
+                "entity_type": "supplier",
+                "customer_name": supplier_name,
+                "supplier_name": supplier_name,
+                "institution_name_archetype": "general",
+                "institution_name_archetype_label": "Поставщик",
+                "institution_name_archetype_scores": {},
+                "name_signal_stems": [],
+                "same_type_peer_inns": [],
+            }
+
+        payload = self.get_customer_name_context(inn, limit=limit)
+        payload["entity_type"] = "customer"
+        return payload
 
     def _load_archetype_category_ids(self, archetype: str) -> List[int]:
         if archetype in self._archetype_category_ids_cache:

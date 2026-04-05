@@ -62,20 +62,23 @@ class SQLiteUserHistoryRepository(UserHistoryRepository):
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
 
-    def get_category_purchase_counts(self, user_id: str) -> Dict[str, int]:
-        rows = self.conn.execute(
-            """
-            SELECT
-                cl.normalized_category,
-                SUM(cc.purchase_count) AS purchase_count
-            FROM customer_category_stats cc
-            JOIN category_lookup cl ON cl.category_id = cc.category_id
-            WHERE cc.customer_inn = ?
-            GROUP BY cl.normalized_category
-            ORDER BY purchase_count DESC, cl.normalized_category ASC
-            """,
-            (str(user_id),),
-        ).fetchall()
+    def _fetch_category_counts(self, *, table_name: str, id_column: str, user_id: str) -> Dict[str, int]:
+        try:
+            rows = self.conn.execute(
+                f"""
+                SELECT
+                    cl.normalized_category,
+                    SUM(stats.purchase_count) AS purchase_count
+                FROM {table_name} stats
+                JOIN category_lookup cl ON cl.category_id = stats.category_id
+                WHERE stats.{id_column} = ?
+                GROUP BY cl.normalized_category
+                ORDER BY purchase_count DESC, cl.normalized_category ASC
+                """,
+                (str(user_id),),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return {}
         result: Dict[str, int] = {}
         for row in rows:
             category_key = str(row["normalized_category"] or "").strip()
@@ -84,19 +87,22 @@ class SQLiteUserHistoryRepository(UserHistoryRepository):
             result[category_key] = int(row["purchase_count"] or 0)
         return result
 
-    def get_ste_purchase_counts(self, user_id: str) -> Dict[str, int]:
-        rows = self.conn.execute(
-            """
-            SELECT
-                cs.ste_id,
-                SUM(cs.purchase_count) AS purchase_count
-            FROM customer_ste_stats cs
-            WHERE cs.customer_inn = ?
-            GROUP BY cs.ste_id
-            ORDER BY purchase_count DESC, cs.ste_id ASC
-            """,
-            (str(user_id),),
-        ).fetchall()
+    def _fetch_ste_counts(self, *, table_name: str, id_column: str, user_id: str) -> Dict[str, int]:
+        try:
+            rows = self.conn.execute(
+                f"""
+                SELECT
+                    stats.ste_id,
+                    SUM(stats.purchase_count) AS purchase_count
+                FROM {table_name} stats
+                WHERE stats.{id_column} = ?
+                GROUP BY stats.ste_id
+                ORDER BY purchase_count DESC, stats.ste_id ASC
+                """,
+                (str(user_id),),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return {}
         result: Dict[str, int] = {}
         for row in rows:
             ste_id = str(row["ste_id"] or "").strip()
@@ -104,6 +110,34 @@ class SQLiteUserHistoryRepository(UserHistoryRepository):
                 continue
             result[ste_id] = int(row["purchase_count"] or 0)
         return result
+
+    def get_category_purchase_counts(self, user_id: str) -> Dict[str, int]:
+        customer_counts = self._fetch_category_counts(
+            table_name="customer_category_stats",
+            id_column="customer_inn",
+            user_id=user_id,
+        )
+        if customer_counts:
+            return customer_counts
+        return self._fetch_category_counts(
+            table_name="supplier_category_stats",
+            id_column="supplier_inn",
+            user_id=user_id,
+        )
+
+    def get_ste_purchase_counts(self, user_id: str) -> Dict[str, int]:
+        customer_counts = self._fetch_ste_counts(
+            table_name="customer_ste_stats",
+            id_column="customer_inn",
+            user_id=user_id,
+        )
+        if customer_counts:
+            return customer_counts
+        return self._fetch_ste_counts(
+            table_name="supplier_ste_stats",
+            id_column="supplier_inn",
+            user_id=user_id,
+        )
 
 
 class UserProfileScorer:
