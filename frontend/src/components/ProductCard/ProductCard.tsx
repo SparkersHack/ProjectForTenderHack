@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Product } from '../../types';
 import { useStore } from '../../store/store';
@@ -10,6 +10,7 @@ interface ProductCardProps {
 
 const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
     const [isOpen, setIsOpen] = useState(false);
+    const isOpenRef = useRef(false);
     const { simulateProductOpen, simulateProductClose, addToCart } = useStore();
 
     const handleOpen = () => {
@@ -24,12 +25,16 @@ const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
     };
 
     useEffect(() => {
+        isOpenRef.current = isOpen;
+    }, [isOpen]);
+
+    useEffect(() => {
         return () => {
-            if (isOpen) {
+            if (isOpenRef.current) {
                 simulateProductClose(product.id, product.category);
             }
         };
-    }, [isOpen, product.id, product.category, simulateProductClose]);
+    }, [product.id, product.category, simulateProductClose]);
 
     useEffect(() => {
         if (!isOpen) {

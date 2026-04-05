@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { AutocompleteSuggestion, SearchResponse, User } from '../types';
+import { AutocompleteSuggestion, EventResponse, SearchResponse, User } from '../types';
 
 const api = axios.create({
     baseURL: import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000',
@@ -22,6 +22,7 @@ export interface SearchEventPayload {
     steId?: string;
     category?: string;
     durationMs?: number;
+    closeReason?: 'dismiss' | 'after_cart_add';
 }
 
 export interface SearchProductsOptions {
@@ -65,7 +66,7 @@ export const getSuggestions = async (
         return [];
     }
 
-    const params: Record<string, string> = { q: query };
+    const params: Record<string, string> = { q: query, top_k: '8' };
     const mergedViewedCategories = [...new Set([...(user?.viewedCategories ?? []), ...viewedCategories])]
         .filter((value) => value && value.trim().length > 0);
     const topCategories = (user?.topCategories ?? [])
@@ -93,6 +94,7 @@ export const login = async (inn: string): Promise<User> => {
     return response.data;
 };
 
-export const sendEvent = async (payload: SearchEventPayload): Promise<void> => {
-    await api.post('/api/event', payload);
+export const sendEvent = async (payload: SearchEventPayload): Promise<EventResponse> => {
+    const response = await api.post<EventResponse>('/api/event', payload);
+    return response.data;
 };

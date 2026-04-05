@@ -450,6 +450,22 @@ class SearchService:
         # Never let attribute penalty alone push score to extremely negative
         return max(total, -6.0)
 
+    @staticmethod
+    def _significant_stems(stems: Iterable[str]) -> set[str]:
+        """Ignore ultra-short stems for lexical cover features.
+
+        Very short user prefixes like "кир" are useful for retrieval, but they
+        are too noisy for strong rank-time boosts: naive stemming collapses
+        tokens like "киров" -> "кир", which can outrank the more probable
+        completion "кирпич". We still keep such stems in retrieval via MATCH,
+        but we don't treat them as full lexical evidence in scoring.
+        """
+        return {
+            stem
+            for stem in stems
+            if stem and (stem.isdigit() or len(stem) >= 4)
+        }
+
     def _score_candidate(self, row: sqlite3.Row, analysis: QueryAnalysis) -> tuple[float, Dict[str, float]]:
         name_tokens = set(tokenize(row["normalized_name"]))
         category_tokens = set(tokenize(row["normalized_category"]))
@@ -460,7 +476,7 @@ class SearchService:
         key_stems = set(stem_tokens(key_tokens))
 
         corrected_set = set(analysis.corrected_tokens)
-        stem_set = set(analysis.stemmed_tokens)
+        stem_set = self._significant_stems(analysis.stemmed_tokens)
         expanded_stem_set = set(analysis.expanded_stems)
         semantic_stem_set = set(stem_tokens(analysis.semantic_expansions))
 

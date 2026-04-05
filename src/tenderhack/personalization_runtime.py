@@ -202,9 +202,9 @@ class PersonalizationRuntimeService:
             for key, value in dict(user_profile.get("last_category_purchase_dt", {})).items()
         }
 
-        ste_purchase_count = ste_counts.get(ste_id, 0)
-        if ste_purchase_count > 0:
-            priority += 100.0 + min(20.0, float(ste_purchase_count) * 5.0)
+        ste_repeat_purchase_count = max(0, ste_counts.get(ste_id, 0) - 1)
+        if ste_repeat_purchase_count > 0:
+            priority += 100.0 + min(20.0, float(ste_repeat_purchase_count) * 5.0)
             ste_last_dt = last_ste_purchase_dt.get(ste_id)
             if ste_last_dt is not None:
                 recency_days = max(0, (reference_date - ste_last_dt).days)
@@ -256,11 +256,11 @@ class PersonalizationRuntimeService:
     def _session_priority(reason_codes: List[str]) -> float:
         code_set = {str(code) for code in reason_codes}
         if "SESSION_CART_BOOST" in code_set:
-            return 100.0
+            return 0.0
         if "SESSION_CLICK_BOOST" in code_set:
             return 60.0
         if "SESSION_CATEGORY_BOOST" in code_set:
-            return 15.0
+            return 0.0
         return 0.0
 
     def _dynamic_session_adjustment(
@@ -285,13 +285,12 @@ class PersonalizationRuntimeService:
             reason_codes.append("SESSION_CLICK_BOOST")
             reasons.append("Поднято после недавнего клика пользователя")
         if ste_id and ste_id in cart_ids:
-            # Cart actions are the strongest online signal and should dominate
-            # weaker historical priors for the exact candidate.
-            score += 35.0
+            base_search_score = float(candidate.get("search_score", 0.0) or 0.0)
+            score += min(1.2, max(0.45, base_search_score * 0.08))
             reason_codes.append("SESSION_CART_BOOST")
             reasons.append("Поднято после добавления похожей позиции в корзину")
         if category_norm and category_norm in recent_categories:
-            score += 1.5
+            score += 0.35
             reason_codes.append("SESSION_CATEGORY_BOOST")
             reasons.append("Категория была недавно просмотрена в текущей сессии")
         if category_norm and category_norm in bounced_categories:
@@ -315,7 +314,6 @@ class PersonalizationRuntimeService:
         profile["customer_inn"] = customer_inn or ""
         if customer_region:
             profile["customer_region"] = customer_region
-        self._apply_session_categories(profile=profile, session_categories=session_categories, reference_date=reference_date)
         archetype, archetype_scores = self._infer_profile_archetype(profile)
         profile["institution_archetype"] = archetype
         profile["institution_archetype_scores"] = archetype_scores

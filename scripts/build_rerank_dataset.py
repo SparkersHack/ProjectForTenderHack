@@ -37,14 +37,34 @@ SERVICE_WORDS = {
     "услуги",
 }
 
+CONTRACT_DATASET_CANDIDATES = [
+    Path("data/processed/contracts_clean.csv"),
+    Path("data/processed/contracts_flat.csv"),
+    Path("data/processed/contracts.csv"),
+]
+
 
 def _resolve_contracts_path(explicit_path: str | None) -> Path:
     if explicit_path:
-        return Path(explicit_path)
-    candidates = sorted((PROJECT_ROOT / "data").glob("*.csv"), key=lambda path: path.stat().st_size)
-    if not candidates:
-        raise FileNotFoundError("Contracts CSV was not found under data/")
-    return candidates[0]
+        path = Path(explicit_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Contracts CSV was not found: {path}")
+        return path
+
+    candidates: List[Path] = [PROJECT_ROOT / path for path in CONTRACT_DATASET_CANDIDATES]
+    candidates.extend(sorted(PROJECT_ROOT.glob("Контракты_*.csv")))
+    candidates.extend(sorted((PROJECT_ROOT / "data").glob("Контракты_*.csv")))
+    candidates.extend(sorted((PROJECT_ROOT / "data").glob("*.csv"), key=lambda path: (path.stat().st_size, str(path))))
+
+    resolved = next((path for path in candidates if path.exists()), None)
+    if resolved is None:
+        looked_up = "\n".join(f"- {path}" for path in candidates[:8])
+        raise FileNotFoundError(
+            "Contracts CSV was not found. Looked in these locations:\n"
+            f"{looked_up}\n"
+            "Pass --contracts-path explicitly if your file lives elsewhere."
+        )
+    return resolved
 
 
 def _detect_delimiter(path: Path) -> str:

@@ -102,6 +102,42 @@ class SearchServiceTests(unittest.TestCase):
                     "сифон бутылочный горлышко",
                 ]
             )
+            writer.writerow(
+                [
+                    "ste-6",
+                    "Кирпич красный строительный",
+                    "кирпич красный строительный",
+                    "Кирпичи строительные",
+                    "кирпичи строительные",
+                    "Тип | Материал",
+                    "2",
+                    "кирпич кирпичи строительный",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-7",
+                    "Замок дверной Киров",
+                    "замок дверной киров",
+                    "Замки дверные",
+                    "замки дверные",
+                    "Бренд | Тип",
+                    "2",
+                    "замок киров дверной",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-8",
+                    "Кирпич облицовочный",
+                    "кирпич облицовочный",
+                    "Кирпичи облицовочные",
+                    "кирпичи облицовочные",
+                    "Тип | Материал",
+                    "2",
+                    "кирпич кирпичи облицовочный",
+                ]
+            )
 
         cls.synonyms_path.write_text(
             json.dumps(
@@ -233,6 +269,20 @@ class SearchServiceTests(unittest.TestCase):
             for target in item["targets"]
         }
         self.assertTrue({"канцелярская", "канцелярские"} & completion_targets)
+
+    def test_short_prefix_prefers_probable_completion_over_stemmed_brand_match(self) -> None:
+        payload = self.service.search("кир", top_k=5, min_score=0.0)
+        completion_targets = {
+            target
+            for item in payload["query"]["applied_completions"]
+            if item["source"] == "кир"
+            for target in item["targets"]
+        }
+        self.assertIn("кирпич", completion_targets)
+        self.assertIn(payload["results"][0]["ste_id"], {"ste-6", "ste-8"})
+        top_ids = [item["ste_id"] for item in payload["results"][:3]]
+        self.assertTrue({"ste-6", "ste-8"} & set(top_ids))
+        self.assertNotEqual(payload["results"][0]["ste_id"], "ste-7")
 
     def test_inflectional_variant_is_not_forced_into_different_wordform(self) -> None:
         payload = self.service.search("бутылочное горлышко", top_k=3, min_score=0.0)

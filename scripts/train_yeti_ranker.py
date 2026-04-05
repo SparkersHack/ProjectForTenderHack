@@ -56,6 +56,24 @@ def _resolve_output_path(path_value: str, *, loss_function: str, default_value: 
     return path.with_name(f"{path.stem}{suffix}{path.suffix}")
 
 
+def _require_dataset_path(dataset_path: Path) -> None:
+    if dataset_path.exists():
+        return
+
+    default_dataset = PROJECT_ROOT / DEFAULT_DATASET_PATH
+    build_hint = (
+        "Dataset for rerank training was not found.\n"
+        f"Expected: {dataset_path}\n"
+        "Build it first, for example:\n"
+        "  venv/bin/python scripts/build_rerank_dataset.py "
+        "--contracts-path Контракты_20260403.csv "
+        "--output-path data/processed/rerank_train_current.csv\n"
+    )
+    if dataset_path == Path(DEFAULT_DATASET_PATH) or dataset_path == default_dataset:
+        raise FileNotFoundError(build_hint)
+    raise FileNotFoundError(f"{build_hint}Or pass an existing CSV via --dataset-path.")
+
+
 def _load_rows(dataset_path: Path) -> tuple[List[Dict[str, object]], List[str]]:
     with dataset_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -146,6 +164,7 @@ def train_yeti_ranker(
     if CatBoostRanker is None or Pool is None:
         raise RuntimeError(f"CatBoost is not available: {CATBOOST_IMPORT_ERROR}")
 
+    _require_dataset_path(dataset_path)
     rows, feature_names = _load_rows(dataset_path)
     splits = _split_group_ids(
         [str(row["group_id"]) for row in rows],

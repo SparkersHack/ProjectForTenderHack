@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { User, Product, AutocompleteSuggestion, SearchResponse } from '../types';
-import { sendEvent } from '../api';
+import { searchProducts, sendEvent } from '../api';
 
 interface StoreState {
   // User state
@@ -11,6 +11,7 @@ interface StoreState {
   viewedCategories: string[]; 
   bouncedCategories: string[]; // Penalized categories
   productOpenTimes: Record<string, number>; // productId -> timestamp of opening
+  cartCloseGraceProductIds: Record<string, boolean>;
   cartProducts: Product[];
 
   // Search Context
@@ -49,6 +50,7 @@ export const useStore = create<StoreState>((set, get) => ({
       viewedCategories: user.viewedCategories ?? [],
       bouncedCategories: [],
       productOpenTimes: {},
+      cartCloseGraceProductIds: {},
       cartProducts: [],
     }),
   logout: () =>
@@ -57,6 +59,7 @@ export const useStore = create<StoreState>((set, get) => ({
       viewedCategories: [],
       bouncedCategories: [],
       productOpenTimes: {},
+      cartCloseGraceProductIds: {},
       cartProducts: [],
       results: [],
       searchQuery: '',
@@ -70,6 +73,7 @@ export const useStore = create<StoreState>((set, get) => ({
   viewedCategories: [],
   bouncedCategories: [],
   productOpenTimes: {},
+  cartCloseGraceProductIds: {},
   cartProducts: [],
 
   searchQuery: '',
@@ -115,7 +119,6 @@ export const useStore = create<StoreState>((set, get) => ({
     const { user } = get();
     set((state) => ({
       productOpenTimes: { ...state.productOpenTimes, [productId]: Date.now() },
-      viewedCategories: [...new Set([...state.viewedCategories, category])]
     }));
     void sendEvent({
       userId: user?.id,
@@ -124,35 +127,99 @@ export const useStore = create<StoreState>((set, get) => ({
       eventType: 'item_open',
       steId: productId,
       category,
-    }).catch((error) => console.error(error));
+    })
+      .then((response) => {
+        set({
+          viewedCategories: [...new Set((response.recentCategories ?? []).filter((value) => value && value.trim().length > 0))],
+        });
+      })
+      .catch((error) => console.error(error));
   },
 
   simulateProductClose: (productId, category) => {
-    const { user, productOpenTimes } = get();
+    const { user, productOpenTimes, cartCloseGraceProductIds } = get();
     const openTime = productOpenTimes[productId];
     const timeSpent = openTime ? Date.now() - openTime : 10000;
+    const closeReason = cartCloseGraceProductIds[productId] ? 'after_cart_add' : undefined;
 
     set((state) => {
       const nextOpenTimes = { ...state.productOpenTimes };
+      const nextCartCloseGraceProductIds = { ...state.cartCloseGraceProductIds };
       delete nextOpenTimes[productId];
+      delete nextCartCloseGraceProductIds[productId];
       return {
         productOpenTimes: nextOpenTimes,
-        bouncedCategories:
-          timeSpent < 2000
-            ? [...new Set([...state.bouncedCategories, category])]
-            : state.bouncedCategories,
+        cartCloseGraceProductIds: nextCartCloseGraceProductIds,
+        bouncedCategories: state.bouncedCategories,
       };
     });
 
-    void sendEvent({
-      userId: user?.id,
-      inn: user?.inn,
-      region: user?.region,
-      eventType: 'item_close',
-      steId: productId,
-      category,
-      durationMs: timeSpent,
-    }).catch((error) => console.error(error));
+    void (async () => {
+      try {
+        const response = await sendEvent({
+          userId: user?.id,
+          inn: user?.inn,
+          region: user?.region,
+          eventType: 'item_close',
+          steId: productId,
+          category,
+          durationMs: timeSpent,
+          closeReason,
+        });
+        const nextBouncedCategories = [
+          ...new Set((response.bouncedCategories ?? []).filter((value) => value && value.trim().length > 0)),
+        ];
+        set({
+          viewedCategories: [...new Set((response.recentCategories ?? []).filter((value) => value && value.trim().length > 0))],
+          bouncedCategories: nextBouncedCategories,
+        });
+
+        if (response.itemCloseOutcome !== 'applied') {
+          return;
+        }
+
+        const {
+          searchQuery,
+          user: activeUser,
+          viewedCategories,
+          searchLimit,
+          minScore,
+          setSearchResponse,
+          setCorrectedQuery,
+          setIsSearching,
+        } = get();
+        const refreshQuery = searchQuery.trim();
+        if (!refreshQuery) {
+          return;
+        }
+
+        setIsSearching(true);
+        try {
+          const refreshedResponse = await searchProducts(
+            refreshQuery,
+            activeUser,
+            viewedCategories,
+            nextBouncedCategories,
+            {
+              limit: searchLimit,
+              offset: 0,
+              minScore,
+            },
+          );
+          if (get().searchQuery.trim() !== refreshQuery) {
+            return;
+          }
+          setSearchResponse(refreshedResponse);
+          setCorrectedQuery(refreshedResponse.correctedQuery || null);
+        } finally {
+          if (get().searchQuery.trim() === refreshQuery) {
+            setIsSearching(false);
+          }
+        }
+      } catch (error) {
+        console.error(error);
+      }
+    })();
   },
 
   addToCart: (product) => {
@@ -161,7 +228,9 @@ export const useStore = create<StoreState>((set, get) => ({
       cartProducts: state.cartProducts.some((item) => item.id === product.id)
         ? state.cartProducts
         : [...state.cartProducts, product],
-      viewedCategories: [...new Set([...state.viewedCategories, product.category])],
+      cartCloseGraceProductIds: state.productOpenTimes[product.id]
+        ? { ...state.cartCloseGraceProductIds, [product.id]: true }
+        : state.cartCloseGraceProductIds,
     }));
     void sendEvent({
       userId: user?.id,
@@ -170,7 +239,14 @@ export const useStore = create<StoreState>((set, get) => ({
       eventType: 'cart_add',
       steId: product.id,
       category: product.category,
-    }).catch((error) => console.error(error));
+    })
+      .then((response) => {
+        set({
+          viewedCategories: [...new Set((response.recentCategories ?? []).filter((value) => value && value.trim().length > 0))],
+          bouncedCategories: [...new Set((response.bouncedCategories ?? []).filter((value) => value && value.trim().length > 0))],
+        });
+      })
+      .catch((error) => console.error(error));
   },
 
   removeFromCart: (productId) => {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import math
 import sqlite3
 from dataclasses import dataclass
@@ -18,6 +19,15 @@ INSTITUTION_ARCHETYPE_LABELS = {
     "facilities": "эксплуатационно-хозяйственных учреждений",
     "security_it": "учреждений с повышенным ИТ/безопасностным профилем",
     "general": "похожих учреждений",
+}
+
+INSTITUTION_ARCHETYPE_PROFILE_LABELS = {
+    "healthcare": "Медицинская организация",
+    "education": "Образовательная организация",
+    "office_admin": "Административная организация",
+    "facilities": "Эксплуатационно-хозяйственная организация",
+    "security_it": "ИТ / безопасность",
+    "general": "Общий профиль",
 }
 
 INSTITUTION_ARCHETYPE_KEYWORDS = {
@@ -108,6 +118,89 @@ ARCHETYPE_KEYWORD_STEMS = {
     for archetype, keywords in INSTITUTION_ARCHETYPE_KEYWORDS.items()
 }
 
+CUSTOMER_NAME_ARCHETYPE_KEYWORDS = {
+    "healthcare": {
+        "гбуз",
+        "обуз",
+        "больница",
+        "поликлиника",
+        "клиническая",
+        "госпиталь",
+        "диспансер",
+        "роддом",
+        "родильный",
+        "перинатальный",
+        "санаторий",
+        "медицинский",
+        "медико",
+        "стоматологическая",
+        "амбулатория",
+        "фельдшерский",
+        "аптека",
+    },
+    "education": {
+        "гбоу",
+        "мбоу",
+        "сош",
+        "школа",
+        "гимназия",
+        "лицей",
+        "колледж",
+        "техникум",
+        "университет",
+        "институт",
+        "академия",
+        "училище",
+        "образовательный",
+        "детский",
+        "сад",
+        "доу",
+    },
+    "office_admin": {
+        "администрация",
+        "департамент",
+        "комитет",
+        "министерство",
+        "управление",
+        "мэрия",
+        "префектура",
+        "правительство",
+        "казначейство",
+        "инспекция",
+        "контрольный",
+        "архив",
+    },
+    "facilities": {
+        "жилищник",
+        "благоустройство",
+        "водоканал",
+        "теплосеть",
+        "эксплуатация",
+        "коммунальный",
+        "дорожный",
+        "автодор",
+        "зеленхоз",
+        "уборка",
+        "хозяйственный",
+        "ремонтный",
+    },
+    "security_it": {
+        "информационный",
+        "информатизация",
+        "цифровой",
+        "безопасность",
+        "охрана",
+        "пожарный",
+        "спасательный",
+        "связь",
+    },
+}
+
+CUSTOMER_NAME_ARCHETYPE_STEMS = {
+    archetype: {stem for keyword in keywords for stem in stem_tokens(tokenize(normalize_text(keyword))) if stem}
+    for archetype, keywords in CUSTOMER_NAME_ARCHETYPE_KEYWORDS.items()
+}
+
 
 @dataclass
 class SessionState:
@@ -125,11 +218,21 @@ class SessionState:
 
 
 class PersonalizationService:
-    def __init__(self, db_path: Path | str = DEFAULT_PREPROCESSED_DB) -> None:
+    def __init__(
+        self,
+        db_path: Path | str = DEFAULT_PREPROCESSED_DB,
+        contracts_path: Path | str | None = None,
+    ) -> None:
         self.db_path = Path(db_path)
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        self.contracts_path = Path(contracts_path) if contracts_path else None
         self._archetype_category_ids_cache: Dict[str, List[int]] = {}
+        self._customer_name_index_loaded = False
+        self._customer_name_by_inn: Dict[str, str] = {}
+        self._customer_name_archetype_by_inn: Dict[str, str] = {}
+        self._customer_name_signal_stems_by_inn: Dict[str, set[str]] = {}
+        self._customer_name_archetype_scores_by_inn: Dict[str, Dict[str, float]] = {}
 
     def close(self) -> None:
         self.conn.close()
@@ -294,6 +397,135 @@ class PersonalizationService:
         except sqlite3.OperationalError:
             return None
         return row["customer_region"] if row else None
+
+    @staticmethod
+    def _clean_contract_lookup_text(value: object) -> str:
+        if value is None:
+            return ""
+        return " ".join(str(value).replace("\ufeff", " ").replace("\t", " ").replace("\n", " ").split())
+
+    @staticmethod
+    def _infer_csv_delimiter(path: Path) -> str:
+        try:
+            with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
+                sample = handle.read(4096)
+        except OSError:
+            return ";"
+        return ";" if sample.count(";") >= sample.count(",") else ","
+
+    def _ensure_customer_name_index_loaded(self) -> None:
+        if self._customer_name_index_loaded:
+            return
+
+        self._customer_name_index_loaded = True
+        contracts_path = self.contracts_path
+        if not contracts_path or not contracts_path.exists():
+            return
+
+        delimiter = self._infer_csv_delimiter(contracts_path)
+        try:
+            with contracts_path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
+                reader = csv.reader(handle, delimiter=delimiter, quotechar='"')
+                for row in reader:
+                    if len(row) < 7:
+                        continue
+                    customer_inn = self._clean_contract_lookup_text(row[5])
+                    customer_name = self._clean_contract_lookup_text(row[6])
+                    if (
+                        not customer_inn
+                        or not customer_name
+                        or customer_inn.lower() == "customer_inn"
+                        or normalize_text(customer_name) == "customer_name"
+                    ):
+                        continue
+
+                    current_name = self._customer_name_by_inn.get(customer_inn, "")
+                    if len(normalize_text(customer_name)) >= len(normalize_text(current_name)):
+                        self._customer_name_by_inn[customer_inn] = customer_name
+        except OSError:
+            return
+
+        for customer_inn, customer_name in self._customer_name_by_inn.items():
+            archetype, signal_stems, scores = self._infer_customer_name_archetype(customer_name)
+            self._customer_name_archetype_by_inn[customer_inn] = archetype
+            self._customer_name_signal_stems_by_inn[customer_inn] = signal_stems
+            self._customer_name_archetype_scores_by_inn[customer_inn] = scores
+
+    @classmethod
+    def _infer_customer_name_archetype(cls, customer_name: str) -> tuple[str, set[str], Dict[str, float]]:
+        customer_name_stems = set(stem_tokens(tokenize(normalize_text(customer_name))))
+        if not customer_name_stems:
+            return "general", set(), {}
+
+        scores = {archetype: 0.0 for archetype in CUSTOMER_NAME_ARCHETYPE_STEMS}
+        overlap_by_archetype: Dict[str, set[str]] = {}
+        for archetype, keyword_stems in CUSTOMER_NAME_ARCHETYPE_STEMS.items():
+            overlap = customer_name_stems & keyword_stems
+            if not overlap:
+                continue
+            overlap_by_archetype[archetype] = overlap
+            scores[archetype] = float(len(overlap))
+
+        rounded_scores = {key: round(value, 4) for key, value in scores.items() if value > 0}
+        if not rounded_scores:
+            return "general", set(), {}
+
+        archetype, archetype_score = max(scores.items(), key=lambda item: item[1])
+        if archetype_score < 1.0:
+            return "general", set(), rounded_scores
+        return archetype, overlap_by_archetype.get(archetype, set()), rounded_scores
+
+    @classmethod
+    def customer_name_archetype_match_score(cls, *, archetype: str, texts: Iterable[str]) -> float:
+        keyword_stems = CUSTOMER_NAME_ARCHETYPE_STEMS.get(archetype, set())
+        if not keyword_stems:
+            return 0.0
+
+        candidate_stems: set[str] = set()
+        for text in texts:
+            candidate_stems.update(stem_tokens(tokenize(normalize_text(text))))
+        if not candidate_stems:
+            return 0.0
+
+        overlap = candidate_stems & keyword_stems
+        if not overlap:
+            return 0.0
+        return round(min(1.0, len(overlap) / 2.0), 4)
+
+    def get_customer_name_context(self, customer_inn: str, *, limit: int = 120) -> Dict[str, object]:
+        customer_inn = str(customer_inn or "")
+        self._ensure_customer_name_index_loaded()
+
+        customer_name = self._customer_name_by_inn.get(customer_inn, "")
+        archetype = self._customer_name_archetype_by_inn.get(customer_inn, "general")
+        signal_stems = set(self._customer_name_signal_stems_by_inn.get(customer_inn, set()))
+        scores = dict(self._customer_name_archetype_scores_by_inn.get(customer_inn, {}))
+
+        peer_candidates: List[tuple[int, str]] = []
+        if archetype != "general":
+            for peer_inn, peer_archetype in self._customer_name_archetype_by_inn.items():
+                if peer_inn == customer_inn or peer_archetype != archetype:
+                    continue
+                peer_signal_stems = set(self._customer_name_signal_stems_by_inn.get(peer_inn, set()))
+                if signal_stems and peer_signal_stems and not (signal_stems & peer_signal_stems):
+                    continue
+                peer_score = len(signal_stems & peer_signal_stems) * 10 + len(peer_signal_stems)
+                peer_candidates.append((peer_score, peer_inn))
+
+        peer_candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        same_type_peer_inns = [peer_inn for _, peer_inn in peer_candidates[:limit]]
+
+        return {
+            "customer_name": customer_name,
+            "institution_name_archetype": archetype,
+            "institution_name_archetype_label": INSTITUTION_ARCHETYPE_PROFILE_LABELS.get(
+                archetype,
+                INSTITUTION_ARCHETYPE_PROFILE_LABELS["general"],
+            ),
+            "institution_name_archetype_scores": scores,
+            "name_signal_stems": sorted(signal_stems),
+            "same_type_peer_inns": same_type_peer_inns,
+        }
 
     def _load_archetype_category_ids(self, archetype: str) -> List[int]:
         if archetype in self._archetype_category_ids_cache:

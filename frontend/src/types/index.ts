@@ -16,6 +16,10 @@ export interface User {
     id: string;
     inn: string;
     region: string;
+    customerName?: string | null;
+    organizationTypeCode?: string | null;
+    organizationTypeLabel?: string | null;
+    organizationTypeSource?: string | null;
     viewedCategories: string[];
     topCategories?: PurchaseCategory[];
     frequentProducts?: FrequentProduct[];
@@ -38,6 +42,17 @@ export interface SearchResponse {
     total_found: number;
     has_more: boolean;
     correctedQuery?: string; // Если была опечатка
+}
+
+export interface EventResponse {
+    status: string;
+    userId: string;
+    sessionVersion: number;
+    recentCategories: string[];
+    clickedSteIds: string[];
+    cartSteIds: string[];
+    bouncedCategories: string[];
+    itemCloseOutcome: 'none' | 'forgiven' | 'applied' | 'suppressed';
 }
 
 export interface AutocompleteSuggestion {
