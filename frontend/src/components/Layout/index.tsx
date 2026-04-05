@@ -5,6 +5,33 @@ import { useNavigate } from 'react-router-dom';
 import Cart from '../Cart';
 import portalSuppliersLogo from '../../assets/portal-suppliers-logo.jpeg';
 
+const ORGANIZATION_TYPE_DETAILS: Record<string, { title: string; scope: string }> = {
+    healthcare: {
+        title: 'Подходит для медицинских учреждений и служб здравоохранения.',
+        scope: 'Больницы, поликлиники, диспансеры, амбулатории, аптеки и другие медорганизации.',
+    },
+    education: {
+        title: 'Подходит для образовательных учреждений.',
+        scope: 'Школы, гимназии, лицеи, детские сады, колледжи, техникумы и вузы.',
+    },
+    office_admin: {
+        title: 'Подходит для административного и офисного профиля.',
+        scope: 'Администрации, департаменты, комитеты, инспекции, архивы и типовые офисные подразделения.',
+    },
+    facilities: {
+        title: 'Подходит для хозяйственных и эксплуатационных организаций.',
+        scope: 'Коммунальные службы, благоустройство, дорожные, ремонтные и эксплуатационные подразделения.',
+    },
+    security_it: {
+        title: 'Подходит для ИТ-, связи и безопасности.',
+        scope: 'Службы информатизации, связи, охраны, пожарной и информационной безопасности.',
+    },
+    general: {
+        title: 'У этой организации смешанный профиль без одного доминирующего типа.',
+        scope: 'Тип не сводится к одной устойчивой группе, поэтому персонализация строится по общему профилю.',
+    },
+};
+
 const Layout = ({ children }: { children: React.ReactNode }) => {
     const { user, logout, cartProducts } = useStore();
     const navigate = useNavigate();
@@ -39,9 +66,11 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
     const hasHiddenFrequentProducts = frequentProducts.length > visibleFrequentProductsCount;
     const canCollapseFrequentProducts =
         frequentProducts.length > 6 && visibleFrequentProductsCount >= frequentProducts.length;
+    const organizationTypeCode = user?.organizationTypeCode?.trim() || 'general';
     const organizationTypeLabel = user?.organizationTypeLabel?.trim() || 'Общий профиль';
     const organizationTypeSource = user?.organizationTypeSource?.trim() || 'По истории закупок';
     const customerName = user?.customerName?.trim() || `ИНН ${user?.inn ?? ''}`;
+    const organizationTypeDetails = ORGANIZATION_TYPE_DETAILS[organizationTypeCode] ?? ORGANIZATION_TYPE_DETAILS.general;
 
     return (
         <div className="min-h-screen bg-[#f6f7f9] font-sans text-gray-900 flex flex-col">
@@ -115,6 +144,17 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                                                 </div>
                                                 <div className="mt-2 text-xs text-gray-500">
                                                     {organizationTypeSource}
+                                                </div>
+                                                <div className="mt-4 rounded-[10px] border border-[#e3e8ef] bg-white px-4 py-3">
+                                                    <div className="text-[11px] uppercase tracking-[0.12em] text-gray-400">
+                                                        Что означает этот тип
+                                                    </div>
+                                                    <div className="mt-2 text-sm font-semibold text-[#1f2937]">
+                                                        {organizationTypeDetails.title}
+                                                    </div>
+                                                    <div className="mt-1 text-sm leading-6 text-[#5b6574]">
+                                                        {organizationTypeDetails.scope}
+                                                    </div>
                                                 </div>
                                             </div>
 

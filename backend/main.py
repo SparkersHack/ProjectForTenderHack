@@ -221,8 +221,8 @@ class EventResponsePayload(BaseModel):
 
 class TenderHackApiService:
     LOGIN_CACHE_VERSION = 9
-    SEARCH_CACHE_VERSION = 11
-    SUGGESTIONS_CACHE_VERSION = 26
+    SEARCH_CACHE_VERSION = 12
+    SUGGESTIONS_CACHE_VERSION = 27
     PROFILE_TOP_CATEGORIES_LIMIT = 6
     PROFILE_FREQUENT_PRODUCTS_LIMIT = 18
     MAX_HISTORY_CATEGORY_SUGGESTIONS = 1
@@ -231,6 +231,9 @@ class TenderHackApiService:
     MIN_QUERY_COMPLETION_SUGGESTIONS = 3
     MAX_CART_CONTEXT_BOOSTED_RESULTS = 3
     MAX_CART_CONTEXT_SIGNATURE_RESULT_SHARE = 0.45
+    MAX_CART_CATEGORY_BADGED_RESULTS = 2
+    MIN_CART_CATEGORY_QUERY_SCORE = 35.0
+    MAX_CART_CATEGORY_BOOST = 0.045
     _SUGGESTION_TYPE_PRIORITY = {
         "correction": 4,
         "product": 3,
@@ -291,6 +294,14 @@ class TenderHackApiService:
         self.offer_lookup_service.close()
         self.description_service.close()
         self.cache_service.close()
+
+    @staticmethod
+    def _resolve_runtime_user_id(*, user_id: Optional[str], user_inn: Optional[str]) -> str:
+        if user_id:
+            return str(user_id)
+        if user_inn:
+            return f"user-{user_inn}"
+        return "anonymous"
 
     def _validate_required_paths(self) -> None:
         missing = [
@@ -441,7 +452,7 @@ class TenderHackApiService:
     def search(self, payload: SearchRequest) -> SearchResponsePayload:
         page_limit = int(payload.limit or payload.topK)
         user_context = payload.userContext or SearchUserContext()
-        resolved_user_id = user_context.id or (f"user-{user_context.inn}" if user_context.inn else "anonymous")
+        resolved_user_id = self._resolve_runtime_user_id(user_id=user_context.id, user_inn=user_context.inn)
         normalized_query = normalize_text(payload.query)
         short_personalized_prefix = bool(
             user_context.inn
@@ -449,7 +460,7 @@ class TenderHackApiService:
             and 2 <= len(normalized_query) <= 4
         )
         server_session = self.online_state_service.get_session_state(
-            user_id=user_context.id or (f"user-{user_context.inn}" if user_context.inn else None),
+            user_id=resolved_user_id,
             customer_inn=user_context.inn,
             customer_region=user_context.region,
         )
@@ -481,6 +492,10 @@ class TenderHackApiService:
             "bounced_categories": list(bounced_categories),
             "version": int(server_session.get("version", 0) or 0),
         }
+        has_session_signal = any(
+            merged_session_state.get(key)
+            for key in ("recent_categories", "clicked_ste_ids", "cart_ste_ids", "bounced_categories")
+        )
 
         cache_key = self.cache_service.build_key(
             "search",
@@ -517,7 +532,7 @@ class TenderHackApiService:
                 candidates=results,
             )
 
-        if user_context.inn or user_context.region or session_categories:
+        if user_context.inn or user_context.region or has_session_signal:
             personalization_query = (
                 raw_payload["query"].get("corrected_query")
                 or raw_payload["query"].get("normalized_query")
@@ -540,14 +555,23 @@ class TenderHackApiService:
                 item["top_reason_codes"] = []
                 item["reasons"] = ["оставлено выше за счёт базовой текстовой релевантности"]
 
+        cart_items = self._load_cart_context_items(list(merged_session_state.get("cart_ste_ids", [])))
+
         # Шаг 1: точечный буст за конкретные товары в корзине и их близкие аналоги.
         results = self._apply_cart_context_boost(
             results,
             query=payload.query,
-            cart_items=self._load_cart_context_items(list(merged_session_state.get("cart_ste_ids", []))),
+            cart_items=cart_items,
         )
 
-        # Шаг 2: эвристическая пессимизация (штраф за быстрый отказ)
+        # Шаг 2: мягкий lift для товаров той же категории на category-specific запросах.
+        results = self._apply_cart_category_boost(
+            results,
+            query=payload.query,
+            cart_items=cart_items,
+        )
+
+        # Шаг 3: эвристическая пессимизация (штраф за быстрый отказ)
         results = self.ranking_modifier.apply_penalties(
             recommendations=results, 
             user_id=user_context.id or (f"user-{user_context.inn}" if user_context.inn else "anonymous")
@@ -632,7 +656,7 @@ class TenderHackApiService:
         return response_payload
 
     def record_event(self, payload: EventRequest) -> EventResponsePayload:
-        resolved_user_id = payload.userId or (f"user-{payload.inn}" if payload.inn else "anonymous")
+        resolved_user_id = self._resolve_runtime_user_id(user_id=payload.userId, user_inn=payload.inn)
         session_state = self.online_state_service.record_event(
             user_id=resolved_user_id,
             customer_inn=payload.inn,
@@ -1734,6 +1758,102 @@ class TenderHackApiService:
         )
         return updated_results
 
+    @classmethod
+    def _cart_category_query_score(cls, query: str, category: str) -> float:
+        return cls._token_prefix_match_score(query, category, allow_secondary_tokens=False)
+
+    @classmethod
+    def _apply_cart_category_boost(
+        cls,
+        results: List[dict],
+        *,
+        query: str,
+        cart_items: List[dict],
+    ) -> List[dict]:
+        if not results or not cart_items:
+            return results
+
+        cart_ids = {str(item.get("ste_id") or "") for item in cart_items if item.get("ste_id")}
+        category_query_scores: dict[str, float] = {}
+        for cart_item in cart_items:
+            category_norm = normalize_text(str(cart_item.get("category") or cart_item.get("normalized_category") or ""))
+            if not category_norm:
+                continue
+            category_query_scores[category_norm] = max(
+                category_query_scores.get(category_norm, 0.0),
+                cls._cart_category_query_score(query, str(cart_item.get("category") or cart_item.get("normalized_category") or "")),
+            )
+
+        if not category_query_scores:
+            return results
+
+        candidate_boosts: dict[int, tuple[float, float, float]] = {}
+        for index, item in enumerate(results):
+            ste_id = str(item.get("ste_id") or item.get("candidate_id") or "")
+            category_norm = normalize_text(str(item.get("category") or item.get("normalized_category") or ""))
+            if not category_norm or (ste_id and ste_id in cart_ids):
+                continue
+
+            existing_codes = [str(code) for code in item.get("top_reason_codes", []) if code]
+            if "SESSION_CART_BOOST" in existing_codes or "SESSION_CART_CONTEXT_BOOST" in existing_codes:
+                continue
+
+            category_query_score = category_query_scores.get(category_norm, 0.0)
+            if category_query_score < cls.MIN_CART_CATEGORY_QUERY_SCORE:
+                continue
+
+            base_score = float(item.get("final_score", item.get("search_score", 0.0)) or 0.0)
+            category_strength = min(1.0, category_query_score / 120.0)
+            category_boost_multiplier = 1.0 + min(
+                cls.MAX_CART_CATEGORY_BOOST,
+                0.025 + 0.02 * category_strength,
+            )
+            candidate_boosts[index] = (category_query_score, base_score, category_boost_multiplier)
+
+        boosted_indexes = {
+            index
+            for index, _ in sorted(
+                candidate_boosts.items(),
+                key=lambda entry: (entry[1][0], entry[1][1]),
+                reverse=True,
+            )[: cls.MAX_CART_CATEGORY_BADGED_RESULTS]
+        }
+
+        updated_results: List[dict] = []
+        for index, item in enumerate(results):
+            boost_payload = candidate_boosts.get(index)
+            if not boost_payload or index not in boosted_indexes:
+                updated_results.append(item)
+                continue
+
+            boosted = dict(item)
+            base_score = float(boosted.get("final_score", boosted.get("search_score", 0.0)) or 0.0)
+            category_query_score = boost_payload[0]
+            category_boost_multiplier = boost_payload[2]
+            category_boost = base_score * (category_boost_multiplier - 1.0)
+            boosted["final_score"] = round(base_score * category_boost_multiplier, 6)
+            boosted["cart_category_query_score"] = round(category_query_score, 6)
+            boosted["cart_category_boost"] = round(category_boost, 6)
+            boosted["cart_category_multiplier"] = round(category_boost_multiplier, 6)
+            boosted["top_reason_codes"] = ["SESSION_CART_CATEGORY_BOOST", *existing_codes]
+            boosted["reasons"] = unique_preserve_order(
+                ["Поднято как товар из категории, уже добавленной в корзину"]
+                + [str(reason) for reason in boosted.get("reasons", []) if reason]
+            )
+            updated_results.append(boosted)
+
+        updated_results.sort(
+            key=lambda item: (
+                float(item.get("session_priority", 0.0)),
+                float(item.get("final_score", item.get("search_score", 0.0))),
+                float(item.get("search_score", 0.0)),
+                float(item.get("history_priority", 0.0)),
+                float(item.get("personalization_score", 0.0)),
+            ),
+            reverse=True,
+        )
+        return updated_results
+
     def _load_same_type_prefix_stats(
         self,
         *,
@@ -2232,8 +2352,10 @@ class TenderHackApiService:
         session_category_set = {normalize_text(value) for value in session_categories if value}
         category_norm = normalize_text(category)
 
-        if "SESSION_CART_BOOST" in codes or "SESSION_CART_CONTEXT_BOOST" in codes or "SESSION_CLICK_BOOST" in codes:
-            return "Продолжить подбор в этой категории"
+        if "SESSION_CART_BOOST" in codes or "SESSION_CART_CONTEXT_BOOST" in codes or "SESSION_CART_CATEGORY_BOOST" in codes:
+            return "Рекомендовано вам исходя из корзины"
+        if "SESSION_CLICK_BOOST" in codes:
+            return "Недавно смотрели"
         if "INSTITUTION_TYPE_PREFIX_MATCH" in codes:
             return "По типу учреждения"
         if codes & {"USER_CATEGORY_AFFINITY", "USER_REPEAT_BUY", "RECENT_SIMILAR_PURCHASE", "SUPPLIER_AFFINITY"}:
@@ -2241,7 +2363,7 @@ class TenderHackApiService:
         if "SIMILAR_CUSTOMER_POPULARITY" in codes:
             return "Популярно у похожих заказчиков"
         if category_norm and category_norm in session_category_set:
-            return "Продолжить подбор в этой категории"
+            return "Недавно смотрели"
         return None
 
 

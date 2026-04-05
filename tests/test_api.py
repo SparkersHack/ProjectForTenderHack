@@ -979,7 +979,124 @@ class ApiTests(unittest.TestCase):
         reranked_positions = {item["id"]: index for index, item in enumerate(reranked_items)}
         ste4_item = next(item for item in reranked_items if item["id"] == "ste-4")
         self.assertLessEqual(reranked_positions["ste-4"], baseline_positions["ste-4"])
-        self.assertEqual(ste4_item["reasonToShow"], "Продолжить подбор в этой категории")
+        self.assertEqual(ste4_item["reasonToShow"], "Рекомендовано вам исходя из корзины")
+
+    def test_cart_add_boost_works_for_session_only_user_without_history(self) -> None:
+        dynamic_user_id = "user-cart-session-only"
+        search_payload = {
+            "query": "ручка канцелярская",
+            "userContext": {
+                "id": dynamic_user_id,
+                "inn": "",
+                "region": "",
+                "viewedCategories": [],
+            },
+            "viewedCategories": [],
+            "bouncedCategories": [],
+            "topK": 5,
+            "min_score": 0.0,
+        }
+
+        baseline = self.client.post("/api/search", json=search_payload)
+        self.assertEqual(baseline.status_code, 200)
+        baseline_items = baseline.json()["items"]
+        self.assertGreaterEqual(len(baseline_items), 2)
+        baseline_positions = {item["id"]: index for index, item in enumerate(baseline_items)}
+
+        event_response = self.client.post(
+            "/api/event",
+            json={
+                "userId": dynamic_user_id,
+                "eventType": "cart_add",
+                "steId": "ste-4",
+                "category": "Ручки канцелярские",
+            },
+        )
+        self.assertEqual(event_response.status_code, 200)
+        event_payload = event_response.json()
+        self.assertGreaterEqual(event_payload["sessionVersion"], 1)
+        self.assertIn("ste-4", event_payload["cartSteIds"])
+
+        reranked = self.client.post("/api/search", json=search_payload)
+        self.assertEqual(reranked.status_code, 200)
+        reranked_items = reranked.json()["items"]
+        self.assertGreaterEqual(len(reranked_items), 2)
+        reranked_positions = {item["id"]: index for index, item in enumerate(reranked_items)}
+        ste4_item = next(item for item in reranked_items if item["id"] == "ste-4")
+        self.assertLessEqual(reranked_positions["ste-4"], baseline_positions["ste-4"])
+        self.assertEqual(ste4_item["reasonToShow"], "Рекомендовано вам исходя из корзины")
+
+    def test_cart_add_boost_works_for_anonymous_search_session(self) -> None:
+        search_payload = {
+            "query": "ручка канцелярская",
+            "viewedCategories": [],
+            "bouncedCategories": [],
+            "topK": 5,
+            "min_score": 0.0,
+        }
+
+        baseline = self.client.post("/api/search", json=search_payload)
+        self.assertEqual(baseline.status_code, 200)
+        baseline_items = baseline.json()["items"]
+        self.assertGreaterEqual(len(baseline_items), 2)
+        baseline_positions = {item["id"]: index for index, item in enumerate(baseline_items)}
+
+        event_response = self.client.post(
+            "/api/event",
+            json={
+                "eventType": "cart_add",
+                "steId": "ste-4",
+                "category": "Ручки канцелярские",
+            },
+        )
+        self.assertEqual(event_response.status_code, 200)
+        event_payload = event_response.json()
+        self.assertGreaterEqual(event_payload["sessionVersion"], 1)
+        self.assertIn("ste-4", event_payload["cartSteIds"])
+        self.assertEqual(event_payload["userId"], "anonymous")
+
+        reranked = self.client.post("/api/search", json=search_payload)
+        self.assertEqual(reranked.status_code, 200)
+        reranked_items = reranked.json()["items"]
+        self.assertGreaterEqual(len(reranked_items), 2)
+        reranked_positions = {item["id"]: index for index, item in enumerate(reranked_items)}
+        ste4_item = next(item for item in reranked_items if item["id"] == "ste-4")
+        self.assertLessEqual(reranked_positions["ste-4"], baseline_positions["ste-4"])
+        self.assertEqual(ste4_item["reasonToShow"], "Рекомендовано вам исходя из корзины")
+
+    def test_cart_add_marks_same_category_sibling_with_cart_badge(self) -> None:
+        dynamic_user_id = "user-cart-category-halo"
+        search_payload = {
+            "query": "ручка",
+            "userContext": {
+                "id": dynamic_user_id,
+                "inn": "",
+                "region": "",
+                "viewedCategories": [],
+            },
+            "viewedCategories": [],
+            "bouncedCategories": [],
+            "topK": 5,
+            "min_score": 0.0,
+        }
+
+        add_response = self.client.post(
+            "/api/event",
+            json={
+                "userId": dynamic_user_id,
+                "eventType": "cart_add",
+                "steId": "ste-4",
+                "category": "Ручки канцелярские",
+            },
+        )
+        self.assertEqual(add_response.status_code, 200)
+
+        reranked = self.client.post("/api/search", json=search_payload)
+        self.assertEqual(reranked.status_code, 200)
+        reranked_items = reranked.json()["items"]
+        by_id = {item["id"]: item for item in reranked_items}
+        self.assertEqual(by_id["ste-4"]["reasonToShow"], "Рекомендовано вам исходя из корзины")
+        self.assertEqual(by_id["ste-1"]["reasonToShow"], "Рекомендовано вам исходя из корзины")
 
     def test_first_quick_item_close_is_forgiven_in_session(self) -> None:
         service = self.client.app.state.service
@@ -1130,7 +1247,7 @@ class ApiTests(unittest.TestCase):
         reranked_items = after_slow_close.json()["items"]
         self.assertTrue(reranked_items)
         self.assertEqual(reranked_items[0]["id"], "ste-4")
-        self.assertEqual(reranked_items[0]["reasonToShow"], "Продолжить подбор в этой категории")
+        self.assertEqual(reranked_items[0]["reasonToShow"], "Недавно смотрели")
 
     def test_authenticated_search_ignores_client_bounce_until_server_confirms_it(self) -> None:
         dynamic_user_id = "user-first-bounce-search"
@@ -1459,6 +1576,223 @@ class ApiTests(unittest.TestCase):
         self.assertLessEqual(by_id["brick-ceramic"]["cart_context_multiplier"], 1.1)
         self.assertNotIn("cart_context_boost", by_id["brick-silicate"])
         self.assertNotIn("cart_context_boost", by_id["block-gas"])
+
+    def test_cart_category_boost_lifts_same_category_results_for_category_query(self) -> None:
+        service = self.client.app.state.service
+        boosted = service._apply_cart_category_boost(
+            [
+                {
+                    "ste_id": "brick-ceramic",
+                    "clean_name": "Кирпич керамический одинарный",
+                    "normalized_name": "кирпич керамический одинарный",
+                    "category": "Кирпичи строительные",
+                    "normalized_category": "кирпичи строительные",
+                    "key_tokens": "кирпич керамический одинарный",
+                    "search_score": 10.0,
+                    "final_score": 10.0,
+                    "top_reason_codes": [],
+                    "reasons": [],
+                },
+                {
+                    "ste_id": "brick-silicate",
+                    "clean_name": "Кирпич силикатный белый",
+                    "normalized_name": "кирпич силикатный белый",
+                    "category": "Кирпичи строительные",
+                    "normalized_category": "кирпичи строительные",
+                    "key_tokens": "кирпич силикатный белый",
+                    "search_score": 10.0,
+                    "final_score": 10.0,
+                    "top_reason_codes": [],
+                    "reasons": [],
+                },
+                {
+                    "ste_id": "block-gas",
+                    "clean_name": "Блок газобетонный стеновой",
+                    "normalized_name": "блок газобетонный стеновой",
+                    "category": "Блоки строительные",
+                    "normalized_category": "блоки строительные",
+                    "key_tokens": "блок газобетонный стеновой",
+                    "search_score": 10.0,
+                    "final_score": 10.0,
+                    "top_reason_codes": [],
+                    "reasons": [],
+                },
+            ],
+            query="кирпич",
+            cart_items=[
+                {
+                    "ste_id": "brick-cart",
+                    "clean_name": "Кирпич керамический лицевой",
+                    "normalized_name": "кирпич керамический лицевой",
+                    "category": "Кирпичи строительные",
+                    "normalized_category": "кирпичи строительные",
+                    "key_tokens": "кирпич керамический лицевой",
+                }
+            ],
+        )
+
+        by_id = {item["ste_id"]: item for item in boosted}
+        self.assertIn("cart_category_boost", by_id["brick-ceramic"])
+        self.assertIn("cart_category_boost", by_id["brick-silicate"])
+        self.assertGreater(by_id["brick-ceramic"]["final_score"], 10.0)
+        self.assertGreater(by_id["brick-silicate"]["final_score"], 10.0)
+        self.assertIn("SESSION_CART_CATEGORY_BOOST", by_id["brick-ceramic"]["top_reason_codes"])
+        self.assertNotIn("cart_category_boost", by_id["block-gas"])
+
+    def test_cart_category_boost_does_not_activate_for_generic_secondary_token_query(self) -> None:
+        service = self.client.app.state.service
+        boosted = service._apply_cart_category_boost(
+            [
+                {
+                    "ste_id": "lamp-1",
+                    "clean_name": "Лампа светодиодная настольная",
+                    "normalized_name": "лампа светодиодная настольная",
+                    "category": "Лампы световые",
+                    "normalized_category": "лампы световые",
+                    "key_tokens": "лампа светодиодная настольная",
+                    "search_score": 10.0,
+                    "final_score": 10.0,
+                    "top_reason_codes": [],
+                    "reasons": [],
+                },
+                {
+                    "ste_id": "garland-1",
+                    "clean_name": "Гирлянда светодиодная уличная",
+                    "normalized_name": "гирлянда светодиодная уличная",
+                    "category": "Гирлянды световые",
+                    "normalized_category": "гирлянды световые",
+                    "key_tokens": "гирлянда светодиодная уличная",
+                    "search_score": 10.0,
+                    "final_score": 10.0,
+                    "top_reason_codes": [],
+                    "reasons": [],
+                },
+                {
+                    "ste_id": "lamp-2",
+                    "clean_name": "Лампа потолочная светодиодная",
+                    "normalized_name": "лампа потолочная светодиодная",
+                    "category": "Лампы световые",
+                    "normalized_category": "лампы световые",
+                    "key_tokens": "лампа потолочная светодиодная",
+                    "search_score": 10.0,
+                    "final_score": 10.0,
+                    "top_reason_codes": [],
+                    "reasons": [],
+                },
+            ],
+            query="свет",
+            cart_items=[
+                {
+                    "ste_id": "lamp-cart",
+                    "clean_name": "Лампа светодиодная",
+                    "normalized_name": "лампа светодиодная",
+                    "category": "Лампы световые",
+                    "normalized_category": "лампы световые",
+                    "key_tokens": "лампа светодиодная",
+                }
+            ],
+        )
+
+        boosted_ids = [item["ste_id"] for item in boosted if "cart_category_boost" in item]
+        self.assertEqual(boosted_ids, [])
+
+    def test_cart_category_boost_on_suitcases_marks_only_two_siblings(self) -> None:
+        service = self.client.app.state.service
+        boosted = service._apply_cart_category_boost(
+            [
+                {
+                    "ste_id": "suitcase-cart",
+                    "clean_name": "Чемодан дорожный большой",
+                    "normalized_name": "чемодан дорожный большой",
+                    "category": "Чемоданы дорожные",
+                    "normalized_category": "чемоданы дорожные",
+                    "key_tokens": "чемодан дорожный большой",
+                    "search_score": 10.0,
+                    "final_score": 10.8,
+                    "top_reason_codes": ["SESSION_CART_BOOST"],
+                    "reasons": [],
+                },
+                {
+                    "ste_id": "suitcase-1",
+                    "clean_name": "Чемодан дорожный средний",
+                    "normalized_name": "чемодан дорожный средний",
+                    "category": "Чемоданы дорожные",
+                    "normalized_category": "чемоданы дорожные",
+                    "key_tokens": "чемодан дорожный средний",
+                    "search_score": 9.9,
+                    "final_score": 9.9,
+                    "top_reason_codes": [],
+                    "reasons": [],
+                },
+                {
+                    "ste_id": "suitcase-2",
+                    "clean_name": "Чемодан дорожный маленький",
+                    "normalized_name": "чемодан дорожный маленький",
+                    "category": "Чемоданы дорожные",
+                    "normalized_category": "чемоданы дорожные",
+                    "key_tokens": "чемодан дорожный маленький",
+                    "search_score": 9.7,
+                    "final_score": 9.7,
+                    "top_reason_codes": [],
+                    "reasons": [],
+                },
+                {
+                    "ste_id": "suitcase-3",
+                    "clean_name": "Чемодан дорожный тканевый",
+                    "normalized_name": "чемодан дорожный тканевый",
+                    "category": "Чемоданы дорожные",
+                    "normalized_category": "чемоданы дорожные",
+                    "key_tokens": "чемодан дорожный тканевый",
+                    "search_score": 9.4,
+                    "final_score": 9.4,
+                    "top_reason_codes": [],
+                    "reasons": [],
+                },
+                {
+                    "ste_id": "backpack-1",
+                    "clean_name": "Рюкзак туристический",
+                    "normalized_name": "рюкзак туристический",
+                    "category": "Рюкзаки",
+                    "normalized_category": "рюкзаки",
+                    "key_tokens": "рюкзак туристический",
+                    "search_score": 9.8,
+                    "final_score": 9.8,
+                    "top_reason_codes": [],
+                    "reasons": [],
+                },
+            ],
+            query="чемодан",
+            cart_items=[
+                {
+                    "ste_id": "suitcase-cart",
+                    "clean_name": "Чемодан дорожный большой",
+                    "normalized_name": "чемодан дорожный большой",
+                    "category": "Чемоданы дорожные",
+                    "normalized_category": "чемоданы дорожные",
+                    "key_tokens": "чемодан дорожный большой",
+                }
+            ],
+        )
+
+        by_id = {item["ste_id"]: item for item in boosted}
+        badge_by_id = {
+            ste_id: service._map_reason_to_show(
+                reason_codes=item.get("top_reason_codes", []),
+                category=str(item.get("category") or ""),
+                session_categories=[],
+                is_bounced=False,
+            )
+            for ste_id, item in by_id.items()
+        }
+
+        self.assertEqual(badge_by_id["suitcase-cart"], "Рекомендовано вам исходя из корзины")
+        self.assertEqual(badge_by_id["suitcase-1"], "Рекомендовано вам исходя из корзины")
+        self.assertEqual(badge_by_id["suitcase-2"], "Рекомендовано вам исходя из корзины")
+        self.assertIsNone(badge_by_id["suitcase-3"])
+        self.assertIsNone(badge_by_id["backpack-1"])
+        self.assertIn("cart_category_boost", by_id["suitcase-1"])
+        self.assertIn("cart_category_boost", by_id["suitcase-2"])
+        self.assertNotIn("cart_category_boost", by_id["suitcase-3"])
 
     def test_cart_context_does_not_take_over_generic_query_family(self) -> None:
         service = self.client.app.state.service

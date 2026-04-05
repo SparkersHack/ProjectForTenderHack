@@ -42,6 +42,48 @@ interface StoreState {
   clearCart: () => void;
 }
 
+const refreshCurrentSearch = async () => {
+  const {
+    searchQuery,
+    user,
+    viewedCategories,
+    bouncedCategories,
+    searchLimit,
+    minScore,
+    setSearchResponse,
+    setCorrectedQuery,
+    setIsSearching,
+  } = useStore.getState();
+  const refreshQuery = searchQuery.trim();
+  if (!refreshQuery) {
+    return;
+  }
+
+  setIsSearching(true);
+  try {
+    const refreshedResponse = await searchProducts(
+      refreshQuery,
+      user,
+      viewedCategories,
+      bouncedCategories,
+      {
+        limit: searchLimit,
+        offset: 0,
+        minScore,
+      },
+    );
+    if (useStore.getState().searchQuery.trim() !== refreshQuery) {
+      return;
+    }
+    setSearchResponse(refreshedResponse);
+    setCorrectedQuery(refreshedResponse.correctedQuery || null);
+  } finally {
+    if (useStore.getState().searchQuery.trim() === refreshQuery) {
+      setIsSearching(false);
+    }
+  }
+};
+
 export const useStore = create<StoreState>((set, get) => ({
   user: null,
   setUser: (user) =>
@@ -232,21 +274,25 @@ export const useStore = create<StoreState>((set, get) => ({
         ? { ...state.cartCloseGraceProductIds, [product.id]: true }
         : state.cartCloseGraceProductIds,
     }));
-    void sendEvent({
-      userId: user?.id,
-      inn: user?.inn,
-      region: user?.region,
-      eventType: 'cart_add',
-      steId: product.id,
-      category: product.category,
-    })
-      .then((response) => {
+    void (async () => {
+      try {
+        const response = await sendEvent({
+          userId: user?.id,
+          inn: user?.inn,
+          region: user?.region,
+          eventType: 'cart_add',
+          steId: product.id,
+          category: product.category,
+        });
         set({
           viewedCategories: [...new Set((response.recentCategories ?? []).filter((value) => value && value.trim().length > 0))],
           bouncedCategories: [...new Set((response.bouncedCategories ?? []).filter((value) => value && value.trim().length > 0))],
         });
-      })
-      .catch((error) => console.error(error));
+        await refreshCurrentSearch();
+      } catch (error) {
+        console.error(error);
+      }
+    })();
   },
 
   removeFromCart: (productId) => {
