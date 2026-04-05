@@ -7,6 +7,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List
 
+from .dense_retrieval import (
+    DEFAULT_DENSE_EMBEDDING_DIM,
+    DEFAULT_DENSE_TOP_K,
+    DenseRetriever,
+    default_dense_index_path,
+)
+from .learned_dense_retrieval import (
+    DEFAULT_LEARNED_DENSE_DIM,
+    LearnedDenseRetriever,
+    default_learned_dense_index_path,
+    default_learned_dense_model_path,
+)
 from .semantic import DEFAULT_FASTTEXT_MODEL_PATH, SemanticExpander
 from .text import (
     extract_attribute_spans,
@@ -74,8 +86,10 @@ class QueryAnalysis:
     original_tokens: List[str]
     corrected_tokens: List[str]
     stemmed_tokens: List[str]
+    lexical_expanded_tokens: List[str]
     expanded_tokens: List[str]
     expanded_stems: List[str]
+    synonym_expansions: List[str]
     semantic_expansions: List[str]
     completion_expansions: List[str]
     applied_corrections: List[Dict[str, str]]
@@ -223,9 +237,30 @@ class SearchService:
         semantic_backend: str = "auto",
         fasttext_model_path: Path | str = DEFAULT_FASTTEXT_MODEL_PATH,
         fasttext_similarity_threshold: float = 0.55,
+        dense_index_path: Path | str | None = None,
+        dense_top_k: int = DEFAULT_DENSE_TOP_K,
+        dense_embedding_dim: int = DEFAULT_DENSE_EMBEDDING_DIM,
+        learned_dense_model_path: Path | str | None = None,
+        learned_dense_index_path: Path | str | None = None,
     ) -> None:
         self.search_db_path = Path(search_db_path)
         self.synonyms_path = Path(synonyms_path)
+        self.dense_index_path = (
+            Path(dense_index_path)
+            if dense_index_path is not None
+            else default_dense_index_path(self.search_db_path)
+        )
+        self.dense_top_k = dense_top_k
+        self.learned_dense_model_path = (
+            Path(learned_dense_model_path)
+            if learned_dense_model_path is not None
+            else default_learned_dense_model_path(self.search_db_path)
+        )
+        self.learned_dense_index_path = (
+            Path(learned_dense_index_path)
+            if learned_dense_index_path is not None
+            else default_learned_dense_index_path(self.search_db_path)
+        )
         self.conn = sqlite3.connect(self.search_db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.corrector = TypoCorrector(self.conn)
@@ -236,6 +271,21 @@ class SearchService:
             backend=semantic_backend,
             fasttext_model_path=fasttext_model_path,
             fasttext_similarity_threshold=fasttext_similarity_threshold,
+        )
+        self.learned_dense_retriever = LearnedDenseRetriever(
+            self.conn,
+            model_path=self.learned_dense_model_path,
+            index_path=self.learned_dense_index_path,
+            top_k=dense_top_k,
+        )
+        self.dense_retriever = (
+            self.learned_dense_retriever
+            if self.learned_dense_retriever.enabled
+            else DenseRetriever(
+                self.conn,
+                index_path=self.dense_index_path,
+                embedding_dim=dense_embedding_dim,
+            )
         )
 
     def close(self) -> None:
@@ -322,7 +372,8 @@ class SearchService:
         synonym_expansions, applied_synonyms = self._apply_synonyms(expansion_query, corrected_tokens)
         applied_synonyms = self._dedupe_applied_targets(applied_synonyms)
         semantic_expansions, applied_semantic_neighbors = self.semantic_expander.expand_tokens(corrected_tokens)
-        merged_tokens = unique_preserve_order(corrected_tokens + synonym_expansions + completion_expansions + semantic_expansions)
+        lexical_expanded_tokens = unique_preserve_order(corrected_tokens + synonym_expansions + completion_expansions)
+        merged_tokens = unique_preserve_order(lexical_expanded_tokens + semantic_expansions)
         stemmed_tokens = stem_tokens(corrected_tokens)
         expanded_stems = stem_tokens(merged_tokens)
         # Extract structured attribute spans (value+unit pairs) from the original query
@@ -334,8 +385,10 @@ class SearchService:
             original_tokens=original_tokens,
             corrected_tokens=corrected_tokens,
             stemmed_tokens=stemmed_tokens,
+            lexical_expanded_tokens=lexical_expanded_tokens,
             expanded_tokens=merged_tokens,
             expanded_stems=expanded_stems,
+            synonym_expansions=synonym_expansions,
             semantic_expansions=semantic_expansions,
             completion_expansions=completion_expansions,
             applied_corrections=corrections,
@@ -345,12 +398,13 @@ class SearchService:
             attribute_spans=attribute_spans,
         )
 
-    def _build_match_query(self, analysis: QueryAnalysis) -> str:
+    @staticmethod
+    def _build_match_query_from_tokens(tokens: Iterable[str], stems: Iterable[str]) -> str:
         terms: List[str] = []
-        for token in analysis.corrected_tokens:
+        for token in tokens:
             if token:
                 terms.append(f"{token}*")
-        for stem in analysis.expanded_stems:
+        for stem in stems:
             if len(stem) >= 3:
                 terms.append(f"{stem}*")
         terms = unique_preserve_order(terms)
@@ -358,8 +412,7 @@ class SearchService:
             return ""
         return " OR ".join(terms)
 
-    def _fetch_candidates(self, analysis: QueryAnalysis, candidate_limit: int = 250) -> List[sqlite3.Row]:
-        match_query = self._build_match_query(analysis)
+    def _fetch_match_candidates(self, match_query: str, candidate_limit: int) -> List[Dict[str, object]]:
         if not match_query:
             return []
         rows = self.conn.execute(
@@ -383,7 +436,88 @@ class SearchService:
             """,
             (match_query, candidate_limit),
         ).fetchall()
-        return rows
+        return [dict(row) for row in rows]
+
+    def _fetch_rows_by_ids(self, row_ids: List[int], bm25_score: float | None = None) -> List[Dict[str, object]]:
+        if not row_ids:
+            return []
+        placeholders = ", ".join("?" for _ in row_ids)
+        score_sql = "NULL" if bm25_score is None else str(float(bm25_score))
+        rows = self.conn.execute(
+            f"""
+            SELECT
+                ste_catalog.rowid AS row_id,
+                ste_catalog.ste_id,
+                ste_catalog.clean_name,
+                ste_catalog.normalized_name,
+                ste_catalog.category,
+                ste_catalog.normalized_category,
+                ste_catalog.attribute_keys,
+                ste_catalog.attribute_count,
+                ste_catalog.key_tokens,
+                {score_sql} AS bm25_score
+            FROM ste_catalog
+            WHERE ste_catalog.rowid IN ({placeholders})
+            """,
+            tuple(row_ids),
+        ).fetchall()
+        rows_by_id = {int(row["row_id"]): dict(row) for row in rows}
+        return [rows_by_id[row_id] for row_id in row_ids if row_id in rows_by_id]
+
+    @staticmethod
+    def _semantic_candidate_limit(analysis: QueryAnalysis, candidate_limit: int, lexical_hits: int) -> int:
+        if not analysis.semantic_expansions:
+            return 0
+        if lexical_hits == 0:
+            return max(candidate_limit, 80)
+        if len(analysis.corrected_tokens) <= 1:
+            return min(max(40, candidate_limit // 2), 120)
+        return min(max(30, candidate_limit // 3), 80)
+
+    @staticmethod
+    def _dense_candidate_limit(analysis: QueryAnalysis, candidate_limit: int, lexical_hits: int) -> int:
+        if lexical_hits == 0:
+            return min(max(80, candidate_limit), 160)
+        # Dense backfill helps when lexical retrieval is weak or when the query
+        # already carries explicit semantic hints. It should not flood simple
+        # single-token lexical queries with loosely related items.
+        if (
+            len(analysis.corrected_tokens) == 1
+            and not analysis.semantic_expansions
+            and not analysis.applied_synonyms
+            and lexical_hits > 0
+        ):
+            return 0
+        if analysis.semantic_expansions or analysis.applied_synonyms:
+            return min(max(24, candidate_limit // 3), 80)
+        return min(max(16, candidate_limit // 4), 48)
+
+    def _fetch_candidates(self, analysis: QueryAnalysis, candidate_limit: int = 250) -> List[Dict[str, object]]:
+        lexical_query = self._build_match_query_from_tokens(
+            analysis.corrected_tokens,
+            stem_tokens(analysis.lexical_expanded_tokens),
+        )
+        lexical_rows = self._fetch_match_candidates(lexical_query, candidate_limit)
+
+        semantic_query = self._build_match_query_from_tokens([], stem_tokens(analysis.semantic_expansions))
+        semantic_limit = self._semantic_candidate_limit(analysis, candidate_limit, len(lexical_rows))
+        semantic_rows = self._fetch_match_candidates(semantic_query, semantic_limit) if semantic_limit else []
+        dense_rows: List[Dict[str, object]] = []
+        if self.dense_retriever.enabled:
+            dense_limit = self._dense_candidate_limit(analysis, candidate_limit, len(lexical_rows))
+            dense_hits = self.dense_retriever.search(analysis, top_k=min(self.dense_top_k, dense_limit)) if dense_limit else []
+            dense_row_ids = [row_id for row_id, _score in dense_hits]
+            dense_rows = self._fetch_rows_by_ids(dense_row_ids, bm25_score=1_000_000.0)
+
+        merged_rows: List[sqlite3.Row] = []
+        seen_row_ids = set()
+        for row in lexical_rows + semantic_rows + dense_rows:
+            row_id = int(row["row_id"])
+            if row_id in seen_row_ids:
+                continue
+            seen_row_ids.add(row_id)
+            merged_rows.append(row)
+        return merged_rows
 
     @staticmethod
     def _needs_broader_retrieval(analysis: QueryAnalysis) -> bool:
@@ -440,7 +574,12 @@ class SearchService:
         # Never let attribute penalty alone push score to extremely negative
         return max(total, -6.0)
 
-    def _score_candidate(self, row: sqlite3.Row, analysis: QueryAnalysis) -> tuple[float, Dict[str, float]]:
+    def _score_candidate(
+        self,
+        row: Dict[str, object] | sqlite3.Row,
+        analysis: QueryAnalysis,
+        dense_similarity: float = 0.0,
+    ) -> tuple[float, Dict[str, float]]:
         name_tokens = set(tokenize(row["normalized_name"]))
         category_tokens = set(tokenize(row["normalized_category"]))
         key_tokens = set(tokenize(row["key_tokens"]))
@@ -478,8 +617,8 @@ class SearchService:
         expanded_denominator = max(1, len(expanded_stem_set))
         semantic_denominator = max(1, len(semantic_stem_set))
 
-        bm25_score = row["bm25_score"] if row["bm25_score"] is not None else 0.0
-        bm25_component = 1.0 / (1.0 + max(0.0, bm25_score))
+        bm25_score = row["bm25_score"]
+        bm25_component = 0.0 if bm25_score is None else 1.0 / (1.0 + max(0.0, float(bm25_score)))
 
         score = 0.0
         score += 12.0 * exact_phrase
@@ -494,6 +633,7 @@ class SearchService:
         score += 1.0 * (semantic_hits_key / semantic_denominator)
         score += 1.5 * synonym_bonus
         score += 3.0 * semantic_vector_similarity
+        score += 3.5 * dense_similarity
         score += 2.0 * bm25_component
         score += attribute_score  # structured attribute bonus/penalty
 
@@ -509,6 +649,7 @@ class SearchService:
             "semantic_category_overlap": round(semantic_hits_category / semantic_denominator, 4),
             "semantic_key_overlap": round(semantic_hits_key / semantic_denominator, 4),
             "semantic_vector_similarity": round(semantic_vector_similarity, 4),
+            "dense_vector_similarity": round(dense_similarity, 4),
             "synonym_bonus": round(synonym_bonus, 4),
             "bm25_component": round(bm25_component, 4),
             "attribute_score": round(attribute_score, 4),
@@ -523,22 +664,34 @@ class SearchService:
             float(search_features.get("semantic_name_overlap", 0.0) or 0.0),
             float(search_features.get("semantic_category_overlap", 0.0) or 0.0),
             float(search_features.get("semantic_key_overlap", 0.0) or 0.0),
+            float(search_features.get("dense_vector_similarity", 0.0) or 0.0),
         )
 
     @classmethod
     def _passes_min_score(cls, item: Dict[str, object], min_score: float) -> bool:
         search_features = dict(item.get("search_features") or {})
         semantic_score = cls._semantic_score(item)
+        corrected_token_overlap = float(search_features.get("corrected_token_overlap", 0.0) or 0.0)
+        name_stem_overlap = float(search_features.get("name_stem_overlap", 0.0) or 0.0)
+        category_stem_overlap = float(search_features.get("category_stem_overlap", 0.0) or 0.0)
+        key_token_overlap = float(search_features.get("key_token_overlap", 0.0) or 0.0)
         exact_lexical_match = max(
             float(search_features.get("exact_phrase", 0.0) or 0.0),
             float(search_features.get("full_name_cover", 0.0) or 0.0),
             float(search_features.get("full_category_cover", 0.0) or 0.0),
-            float(search_features.get("corrected_token_overlap", 0.0) or 0.0),
+            corrected_token_overlap,
+        )
+        blended_lexical_match = max(
+            exact_lexical_match,
+            0.45 * corrected_token_overlap
+            + 0.25 * name_stem_overlap
+            + 0.15 * category_stem_overlap
+            + 0.15 * key_token_overlap,
         )
         # We cut low-confidence semantic noise, but we keep exact lexical hits:
         # model numbers, article codes and short catalog queries are often valid
         # even when the semantic backend gives them a low vector similarity.
-        return semantic_score >= min_score or exact_lexical_match >= 1.0
+        return semantic_score >= min_score or exact_lexical_match >= 1.0 or blended_lexical_match >= max(0.52, min_score * 0.95)
 
     def search(
         self,
@@ -552,9 +705,17 @@ class SearchService:
         analysis = self.analyze_query(query)
         retrieval_limit = max(candidate_limit, 400) if self._needs_broader_retrieval(analysis) else candidate_limit
         candidates = self._fetch_candidates(analysis, candidate_limit=retrieval_limit)
+        dense_scores = self.dense_retriever.score_row_ids(
+            analysis,
+            [int(row["row_id"]) for row in candidates],
+        ) if self.dense_retriever.enabled else {}
         scored_results: List[Dict[str, object]] = []
         for row in candidates:
-            lexical_score, features = self._score_candidate(row, analysis)
+            lexical_score, features = self._score_candidate(
+                row,
+                analysis,
+                dense_similarity=float(dense_scores.get(int(row["row_id"]), 0.0)),
+            )
             scored_results.append(
                 {
                     "ste_id": row["ste_id"],
@@ -571,6 +732,7 @@ class SearchService:
                             float(features.get("semantic_name_overlap", 0.0) or 0.0),
                             float(features.get("semantic_category_overlap", 0.0) or 0.0),
                             float(features.get("semantic_key_overlap", 0.0) or 0.0),
+                            float(features.get("dense_vector_similarity", 0.0) or 0.0),
                         ),
                         4,
                     ),
@@ -601,6 +763,8 @@ class SearchService:
                 "applied_synonyms": analysis.applied_synonyms,
                 "applied_semantic_neighbors": analysis.applied_semantic_neighbors,
                 "semantic_backend": self.semantic_expander.backend_name,
+                "dense_retrieval_enabled": self.dense_retriever.enabled,
+                "dense_retrieval_backend": getattr(self.dense_retriever, "backend_name", "graph"),
                 "expanded_tokens": analysis.expanded_tokens,
                 "completion_expansions": analysis.completion_expansions,
                 "semantic_expansions": analysis.semantic_expansions,

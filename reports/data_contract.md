@@ -33,15 +33,15 @@
 
 ## Validation Status
 
-- Status: `missing_input`
-- STE path: `None`
-- Contracts path: `None`
+- Status: `ready`
+- STE path: `/Users/nikolaj/ProjectForTenderHack/data/processed/ste_catalog_clean.csv`
+- Contracts path: `/Users/nikolaj/ProjectForTenderHack/Контракты_20260403.csv`
 
 ## Observed STE Dataset
 
-- Rows: 0
-- Unique `ste_id`: 0
-- Duplicate `ste_id`: 0
+- Rows: 542,993
+- Unique `ste_id`: 537,314
+- Duplicate `ste_id`: 5,679
 - Missing `ste_id`: 0
 - Missing `clean_name`: 0
 - Missing `normalized_name`: 0
@@ -53,9 +53,9 @@
 
 ## Observed Contracts Dataset
 
-- Rows: 0
-- Unique compound keys (`contract_id`, `ste_id`, `customer_inn`): 0
-- Duplicate compound keys: 0
+- Rows: 2,010,224
+- Unique compound keys (`contract_id`, `ste_id`, `customer_inn`): 2,009,457
+- Duplicate compound keys: 767
 - Missing `contract_item_name`: 0
 - Missing `contract_id`: 0
 - Missing `ste_id`: 0
@@ -71,8 +71,8 @@
 ## Join Checks
 
 - Join key: `ste_id`
-- Contract rows without STE catalog match: None
-- Catalog STE without contract history: None
+- Contract rows without STE catalog match: 1561
+- Catalog STE without contract history: 40505
 
 ## Missing Data Notes
 
@@ -85,11 +85,16 @@
 
 ### STE
 
+- `{'ste_id': '1222958', 'clean_name': 'Флеш накопитель SMARTBUY Glossy USB 2.0 черный 16 Гб', 'category': 'Usb-накопители твердотельные (флеш-драйвы)', 'attribute_count': 12}`
+- `{'ste_id': '1223536', 'clean_name': 'Флеш накопитель SMARTBUY Crown USB 2.0 черный 4 Гб', 'category': 'Usb-накопители твердотельные (флеш-драйвы)', 'attribute_count': 12}`
+- `{'ste_id': '36025516', 'clean_name': 'Набор реагентов для определения активности аланинаминотрансферазы в сыворотке и плазме крови кинетическим УФ-методом (АЛТ IFCC), (вариант комплектации 1) , №8079', 'category': 'Аланинаминотрансфераза (алт) ивд, набор, ферментный спектрофотометрический анализ', 'attribute_count': 4}`
+- `{'ste_id': '17466132', 'clean_name': 'Парацетамол табл. 500 мг бл N 10x1 Еврофарм Россия', 'category': 'АНАЛЬГЕТИКИ,N02', 'attribute_count': 8}`
+- `{'ste_id': '17517067', 'clean_name': 'Трамадол табл. 100 мг бан N 20x1 Органика Россия', 'category': 'АНАЛЬГЕТИКИ,N02', 'attribute_count': 8}`
 
 ### Contracts
 
-
-## Pending Inputs
-
-- Реальный запуск pipeline заблокирован до появления обоих входных файлов.
-- Второй участник команды должен положить очищенный контрактный датасет в один из ожидаемых путей либо в корень репозитория по маске `Контракты_*.csv`.
+- `{'contract_id': '203255114', 'ste_id': '36047183', 'customer_inn': '7417005438', 'contract_date': '2024-06-05', 'contract_amount': 1200.0}`
+- `{'contract_id': '194452173', 'ste_id': '35778463', 'customer_inn': '5911021660', 'contract_date': '2022-05-26', 'contract_amount': 16800.0}`
+- `{'contract_id': '214274949', 'ste_id': '46358579', 'customer_inn': '5944020101', 'contract_date': '2026-02-11', 'contract_amount': 6825.0}`
+- `{'contract_id': '199009522', 'ste_id': '24120140', 'customer_inn': '8907002558', 'contract_date': '2023-06-17', 'contract_amount': 205000.0}`
+- `{'contract_id': '193681593', 'ste_id': '35754688', 'customer_inn': '8901007006', 'contract_date': '2022-04-01', 'contract_amount': 73130.0}`

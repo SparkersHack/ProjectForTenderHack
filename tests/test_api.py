@@ -370,6 +370,8 @@ class ApiTests(unittest.TestCase):
                     (5, "Плазмозамещающие и перфузионные растворы", "плазмозамещающие и перфузионные растворы"),
                     (6, "Альбомы для рисования", "альбомы для рисования"),
                     (7, "Анализаторы мочи", "анализаторы мочи"),
+                    (8, "Наградная продукция и сувениры", "наградная продукция и сувениры"),
+                    (9, "Бумага офисная A4", "бумага офисная a4"),
                 ],
             )
             conn.executemany(
@@ -384,6 +386,13 @@ class ApiTests(unittest.TestCase):
                     ("7707654322", 5, 18, 18000.0, "2024-01-01", "2025-01-10"),
                     ("7707654322", 3, 6, 2400.0, "2024-01-01", "2025-01-10"),
                     ("7707654322", 6, 1, 200.0, "2024-01-01", "2025-01-10"),
+                    ("7708888888", 8, 14, 24000.0, "2024-01-01", "2025-01-10"),
+                    ("7709999999", 1, 2, 600.0, "2024-01-01", "2025-01-10"),
+                    ("7709999999", 3, 2, 240.0, "2024-01-01", "2025-01-10"),
+                    ("7709999999", 5, 2, 3100.0, "2024-01-01", "2025-01-10"),
+                    ("7709999999", 6, 2, 300.0, "2024-01-01", "2025-01-10"),
+                    ("7709999999", 8, 2, 1600.0, "2024-01-01", "2025-01-10"),
+                    ("7709999999", 9, 2, 800.0, "2024-01-01", "2025-01-10"),
                 ],
             )
             conn.executemany(
@@ -399,6 +408,13 @@ class ApiTests(unittest.TestCase):
                     ("7707654322", "ste-7", 5, 14, 16500.0, "2024-01-01", "2025-01-10"),
                     ("7707654322", "ste-3", 3, 4, 540.0, "2024-01-01", "2025-01-10"),
                     ("7707654322", "ste-8", 6, 1, 200.0, "2024-01-01", "2025-01-10"),
+                    ("7708888888", "ste-award-1", 8, 12, 22000.0, "2024-01-01", "2025-01-10"),
+                    ("7709999999", "ste-chaos-pen", 1, 2, 600.0, "2024-01-01", "2025-01-10"),
+                    ("7709999999", "ste-chaos-analgetic", 3, 2, 240.0, "2024-01-01", "2025-01-10"),
+                    ("7709999999", "ste-chaos-plasma", 5, 2, 3100.0, "2024-01-01", "2025-01-10"),
+                    ("7709999999", "ste-chaos-album", 6, 2, 300.0, "2024-01-01", "2025-01-10"),
+                    ("7709999999", "ste-chaos-award", 8, 2, 1600.0, "2024-01-01", "2025-01-10"),
+                    ("7709999999", "ste-chaos-paper", 9, 2, 800.0, "2024-01-01", "2025-01-10"),
                 ],
             )
             conn.executemany(
@@ -419,6 +435,8 @@ class ApiTests(unittest.TestCase):
                     ("7701234567", "Москва", 6),
                     ("7707654321", "Москва", 5),
                     ("7707654322", "Москва", 5),
+                    ("7708888888", "Москва", 4),
+                    ("7709999999", "Москва", 4),
                 ],
             )
             conn.executemany(
@@ -622,6 +640,173 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(reranked[0]["ste_id"], "ste-1")
             self.assertGreater(reranked[0]["history_priority"], 0.0)
             self.assertGreater(reranked[0]["history_priority"], reranked[1]["history_priority"])
+        finally:
+            runtime_service.close()
+
+    def test_runtime_specific_query_ignores_historical_outlier_category(self) -> None:
+        runtime_service = PersonalizationRuntimeService(db_path=self.preprocessed_db_path)
+        try:
+            reranked = runtime_service.rerank_candidates(
+                query="раскладушка",
+                candidates=[
+                    {
+                        "ste_id": "ste-folding-bed",
+                        "clean_name": "Раскладушка металлическая складная",
+                        "normalized_name": "раскладушка металлическая складная",
+                        "category": "Раскладные кровати и раскладушки",
+                        "normalized_category": "раскладные кровати и раскладушки",
+                        "search_score": 13.0,
+                        "search_features": {
+                            "exact_phrase": 1.0,
+                            "full_name_cover": 1.0,
+                            "full_category_cover": 1.0,
+                            "corrected_token_overlap": 1.0,
+                            "name_stem_overlap": 1.0,
+                            "category_stem_overlap": 1.0,
+                            "semantic_name_overlap": 0.7,
+                            "semantic_category_overlap": 0.5,
+                            "semantic_vector_similarity": 0.82,
+                        },
+                    },
+                    {
+                        "ste_id": "ste-1",
+                        "clean_name": "Ручка канцелярская синяя",
+                        "normalized_name": "ручка канцелярская синяя",
+                        "category": "Ручки канцелярские",
+                        "normalized_category": "ручки канцелярские",
+                        "search_score": 11.9,
+                        "search_features": {
+                            "exact_phrase": 0.0,
+                            "full_name_cover": 0.0,
+                            "full_category_cover": 0.0,
+                            "corrected_token_overlap": 0.4,
+                            "name_stem_overlap": 0.45,
+                            "category_stem_overlap": 0.25,
+                            "semantic_name_overlap": 0.25,
+                            "semantic_category_overlap": 0.15,
+                            "semantic_vector_similarity": 0.38,
+                        },
+                    },
+                ],
+                user_id="user-7701234567",
+                customer_inn="7701234567",
+                customer_region="Москва",
+                session_categories=[],
+            )
+            self.assertEqual(reranked[0]["ste_id"], "ste-folding-bed")
+            self.assertEqual(reranked[1]["history_priority"], 0.0)
+        finally:
+            runtime_service.close()
+
+    def test_runtime_switches_to_new_intent_instead_of_old_awards_profile(self) -> None:
+        runtime_service = PersonalizationRuntimeService(db_path=self.preprocessed_db_path)
+        try:
+            reranked = runtime_service.rerank_candidates(
+                query="дефибриллятор",
+                candidates=[
+                    {
+                        "ste_id": "ste-defib-1",
+                        "clean_name": "Дефибриллятор наружный автоматический AED",
+                        "normalized_name": "дефибриллятор наружный автоматический aed",
+                        "category": "Дефибрилляторы и AED",
+                        "normalized_category": "дефибрилляторы и aed",
+                        "search_score": 12.5,
+                        "search_features": {
+                            "exact_phrase": 1.0,
+                            "full_name_cover": 1.0,
+                            "full_category_cover": 1.0,
+                            "corrected_token_overlap": 1.0,
+                            "name_stem_overlap": 1.0,
+                            "category_stem_overlap": 0.9,
+                            "semantic_name_overlap": 0.7,
+                            "semantic_category_overlap": 0.6,
+                            "semantic_vector_similarity": 0.86,
+                        },
+                    },
+                    {
+                        "ste_id": "ste-award-1",
+                        "clean_name": "Кубок наградной сувенирный",
+                        "normalized_name": "кубок наградной сувенирный",
+                        "category": "Наградная продукция и сувениры",
+                        "normalized_category": "наградная продукция и сувениры",
+                        "search_score": 11.8,
+                        "search_features": {
+                            "exact_phrase": 0.0,
+                            "full_name_cover": 0.0,
+                            "full_category_cover": 0.0,
+                            "corrected_token_overlap": 0.35,
+                            "name_stem_overlap": 0.4,
+                            "category_stem_overlap": 0.2,
+                            "semantic_name_overlap": 0.25,
+                            "semantic_category_overlap": 0.15,
+                            "semantic_vector_similarity": 0.36,
+                        },
+                    },
+                ],
+                user_id="user-7708888888",
+                customer_inn="7708888888",
+                customer_region="Москва",
+                session_categories=[],
+            )
+            self.assertEqual(reranked[0]["ste_id"], "ste-defib-1")
+            self.assertEqual(reranked[1]["history_priority"], 0.0)
+        finally:
+            runtime_service.close()
+
+    def test_runtime_chaotic_profile_behaves_close_to_plain_search(self) -> None:
+        runtime_service = PersonalizationRuntimeService(db_path=self.preprocessed_db_path)
+        try:
+            reranked = runtime_service.rerank_candidates(
+                query="бумага а4",
+                candidates=[
+                    {
+                        "ste_id": "ste-paper-a4",
+                        "clean_name": "Бумага офисная A4 80 г/м2",
+                        "normalized_name": "бумага офисная a4 80 г м2",
+                        "category": "Бумага офисная A4",
+                        "normalized_category": "бумага офисная a4",
+                        "search_score": 12.0,
+                        "search_features": {
+                            "exact_phrase": 1.0,
+                            "full_name_cover": 1.0,
+                            "full_category_cover": 1.0,
+                            "corrected_token_overlap": 1.0,
+                            "name_stem_overlap": 1.0,
+                            "category_stem_overlap": 1.0,
+                            "semantic_name_overlap": 0.65,
+                            "semantic_category_overlap": 0.55,
+                            "semantic_vector_similarity": 0.80,
+                        },
+                    },
+                    {
+                        "ste_id": "ste-chaos-award",
+                        "clean_name": "Набор наградной сувенирный",
+                        "normalized_name": "набор наградной сувенирный",
+                        "category": "Наградная продукция и сувениры",
+                        "normalized_category": "наградная продукция и сувениры",
+                        "search_score": 11.7,
+                        "search_features": {
+                            "exact_phrase": 0.0,
+                            "full_name_cover": 0.0,
+                            "full_category_cover": 0.0,
+                            "corrected_token_overlap": 0.45,
+                            "name_stem_overlap": 0.42,
+                            "category_stem_overlap": 0.2,
+                            "semantic_name_overlap": 0.2,
+                            "semantic_category_overlap": 0.1,
+                            "semantic_vector_similarity": 0.34,
+                        },
+                    },
+                ],
+                user_id="user-7709999999",
+                customer_inn="7709999999",
+                customer_region="Москва",
+                session_categories=[],
+            )
+            self.assertEqual(reranked[0]["ste_id"], "ste-paper-a4")
+            self.assertLess(reranked[0]["history_priority"], 10.0)
+            self.assertEqual(reranked[1]["history_priority"], 0.0)
+            self.assertLess(reranked[0]["final_score"] - reranked[0]["search_score"], 1.5)
         finally:
             runtime_service.close()
 

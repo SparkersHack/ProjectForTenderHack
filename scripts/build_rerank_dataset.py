@@ -5,10 +5,9 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import re
 import sys
 from pathlib import Path
-from typing import Dict, Iterable, Iterator, List, Tuple
+from typing import Dict, Iterable, List
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -18,126 +17,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from tenderhack.rerank_dataset import build_rerank_row
 from tenderhack.search import SearchService
-from tenderhack.text import normalize_text, tokenize, unique_preserve_order
-
-
-SERVICE_WORDS = {
-    "выполнение",
-    "закупка",
-    "оказание",
-    "оказания",
-    "приобретение",
-    "поставка",
-    "поставку",
-    "работ",
-    "работы",
-    "товара",
-    "товаров",
-    "услуг",
-    "услуги",
-}
-
-
-def _resolve_contracts_path(explicit_path: str | None) -> Path:
-    if explicit_path:
-        return Path(explicit_path)
-    candidates = sorted((PROJECT_ROOT / "data").glob("*.csv"), key=lambda path: path.stat().st_size)
-    if not candidates:
-        raise FileNotFoundError("Contracts CSV was not found under data/")
-    return candidates[0]
-
-
-def _detect_delimiter(path: Path) -> str:
-    with path.open("r", encoding="utf-8-sig", newline="") as handle:
-        sample = handle.read(4096)
-    return ";" if sample.count(";") >= sample.count(",") else ","
-
-
-def _clean_text(value: object) -> str:
-    if value is None:
-        return ""
-    return " ".join(str(value).replace("\ufeff", " ").replace("\t", " ").split())
-
-
-def _normalize_header(value: object) -> str:
-    return _clean_text(value).lower().replace(" ", "_")
-
-
-def _iter_contract_rows(path: Path) -> Iterator[Dict[str, str]]:
-    delimiter = _detect_delimiter(path)
-    with path.open("r", encoding="utf-8-sig", newline="") as handle:
-        reader = csv.reader(handle, delimiter=delimiter, quotechar='"')
-        first_row = next(reader, [])
-        normalized_headers = [_normalize_header(value) for value in first_row]
-        expected_headers = {
-            "contract_item_name",
-            "contract_id",
-            "ste_id",
-            "contract_datetime",
-            "contract_amount",
-            "customer_inn",
-            "customer_name",
-            "customer_region",
-            "supplier_inn",
-            "supplier_name",
-            "supplier_region",
-        }
-
-        if set(normalized_headers) >= expected_headers:
-            header_mapping = {normalized: original for normalized, original in zip(normalized_headers, first_row)}
-            dict_reader = csv.DictReader(handle, fieldnames=first_row, delimiter=delimiter, quotechar='"')
-            for row in dict_reader:
-                yield {
-                    "contract_item_name": _clean_text(row.get(header_mapping["contract_item_name"], "")),
-                    "contract_id": _clean_text(row.get(header_mapping["contract_id"], "")),
-                    "ste_id": _clean_text(row.get(header_mapping["ste_id"], "")),
-                    "customer_inn": _clean_text(row.get(header_mapping["customer_inn"], "")),
-                    "customer_region": _clean_text(row.get(header_mapping["customer_region"], "")),
-                }
-            return
-
-        first_cleaned = [_clean_text(value) for value in first_row]
-        if len(first_cleaned) >= 8:
-            yield {
-                "contract_item_name": first_cleaned[0],
-                "contract_id": first_cleaned[1],
-                "ste_id": first_cleaned[2],
-                "customer_inn": first_cleaned[5],
-                "customer_region": first_cleaned[7],
-            }
-
-        for row in reader:
-            cleaned = [_clean_text(value) for value in row]
-            if len(cleaned) < 8:
-                continue
-            yield {
-                "contract_item_name": cleaned[0],
-                "contract_id": cleaned[1],
-                "ste_id": cleaned[2],
-                "customer_inn": cleaned[5],
-                "customer_region": cleaned[7],
-            }
-
-
-def _query_variants(text: str) -> List[Tuple[str, str]]:
-    normalized = normalize_text(text)
-    if not normalized:
-        return []
-
-    first_clause = re.split(r"[;,]|\s+-\s+|\s{2,}", normalized, maxsplit=1)[0].strip()
-    service_stripped = " ".join(token for token in tokenize(normalized) if token not in SERVICE_WORDS).strip()
-    compact = " ".join(tokenize(normalized)[:8]).strip()
-
-    variants: List[Tuple[str, str]] = []
-    for name, value in [
-        ("contract_full", normalized),
-        ("contract_first_clause", first_clause),
-        ("contract_service_stripped", service_stripped),
-        ("contract_compact", compact),
-    ]:
-        if value and value not in [existing for _variant_name, existing in variants]:
-            variants.append((name, value))
-    return variants
+from tenderhack.contract_queries import iter_contract_rows, query_variants, resolve_contracts_path
 
 
 def write_rerank_dataset(
@@ -181,13 +61,13 @@ def write_rerank_dataset(
         with output_path.open("w", encoding="utf-8", newline="") as handle:
             writer: csv.DictWriter | None = None
 
-            for contract in _iter_contract_rows(contracts_path):
+            for contract in iter_contract_rows(contracts_path):
                 if stats["groups_seen"] >= max_groups:
                     break
                 stats["groups_seen"] += 1
 
                 positive_ste_id = str(contract["ste_id"])
-                variants = _query_variants(contract["contract_item_name"])
+                variants = query_variants(contract["contract_item_name"])
                 best_variant_name = ""
                 best_variant_query = ""
                 best_payload = None
@@ -289,7 +169,7 @@ def main() -> None:
     args = parser.parse_args()
 
     stats = write_rerank_dataset(
-        contracts_path=_resolve_contracts_path(args.contracts_path),
+        contracts_path=resolve_contracts_path(PROJECT_ROOT, args.contracts_path),
         search_db_path=Path(args.search_db_path),
         synonyms_path=Path(args.synonyms_path),
         output_path=Path(args.output_path),

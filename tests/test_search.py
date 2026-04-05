@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -16,6 +17,8 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from scripts.build_search_assets import build_search_db
+from tenderhack.dense_retrieval import rebuild_dense_index
+from tenderhack.learned_dense_retrieval import rebuild_learned_dense_artifacts
 from tenderhack.search import SearchService
 
 
@@ -102,6 +105,30 @@ class SearchServiceTests(unittest.TestCase):
                     "сифон бутылочный горлышко",
                 ]
             )
+            writer.writerow(
+                [
+                    "ste-6",
+                    "Автоматический наружный дефибриллятор A15",
+                    "автоматический наружный дефибриллятор a15",
+                    "Медицинское оборудование",
+                    "медицинское оборудование",
+                    "Тип | Назначение",
+                    "2",
+                    "дефибриллятор автоматический наружный a15",
+                ]
+            )
+            writer.writerow(
+                [
+                    "ste-7",
+                    "Defi-B наружный автоматический",
+                    "defi b наружный автоматический",
+                    "Медицинское оборудование",
+                    "медицинское оборудование",
+                    "Тип | Назначение",
+                    "2",
+                    "defi b aed автоматический наружный",
+                ]
+            )
 
         cls.synonyms_path.write_text(
             json.dumps(
@@ -174,6 +201,13 @@ class SearchServiceTests(unittest.TestCase):
         self.assertTrue({"многофункциональное", "устройство"} & semantic_targets)
         self.assertGreater(payload["results"][0]["search_features"]["semantic_name_overlap"], 0.0)
 
+    def test_strong_lexical_anchor_survives_without_semantic_expansion(self) -> None:
+        payload = self.service.search("мфу для офиса", top_k=3)
+        self.assertTrue(payload["results"])
+        self.assertEqual(payload["results"][0]["ste_id"], "ste-4")
+        semantic_sources = {item["source"] for item in payload["query"]["applied_semantic_neighbors"]}
+        self.assertNotIn("офиса", semantic_sources)
+
     def test_min_score_filters_low_semantic_matches_but_keeps_exact_lexical_hits(self) -> None:
         self.assertFalse(
             self.service._passes_min_score(
@@ -242,9 +276,9 @@ class SearchServiceTests(unittest.TestCase):
 
     def test_search_returns_pagination_metadata(self) -> None:
         payload = self.service.search("ручка", limit=1, offset=0, min_score=0.0)
-        self.assertEqual(payload["total_found"], 1)
-        self.assertFalse(payload["has_more"])
+        self.assertGreaterEqual(payload["total_found"], 1)
         self.assertEqual(len(payload["results"]), 1)
+        self.assertEqual(payload["has_more"], payload["total_found"] > 1)
 
     def test_phrase_synonym_does_not_match_inside_larger_token(self) -> None:
         payload = self.service.search("суперфлешка", top_k=3, min_score=0.0)
@@ -261,6 +295,124 @@ class SearchServiceTests(unittest.TestCase):
             "многофункциональное устройство лазерное",
         )
         self.assertGreater(similarity, 0.0)
+
+    def test_sqlite_semantic_backend_filters_generic_modifier_noise(self) -> None:
+        self.service.conn.executemany(
+            """
+            INSERT OR REPLACE INTO token_frequency (token, first_char, token_length, frequency)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                ("автоматический", "а", 13, 4000),
+                ("выключатели", "в", 11, 700),
+                ("дефибриллятор", "д", 13, 24),
+                ("defi", "d", 4, 3),
+            ],
+        )
+        self.service.conn.executemany(
+            """
+            INSERT OR REPLACE INTO semantic_neighbors (token, neighbor, score, cooccurrence)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                ("автоматический", "выключатели", 0.62, 5),
+                ("дефибриллятор", "defi", 0.95, 3),
+                ("defi", "дефибриллятор", 0.95, 3),
+            ],
+        )
+        self.service.conn.commit()
+
+        expansions, applied = self.service.semantic_expander.expand_tokens(["автоматический", "дефибриллятор"])
+
+        self.assertIn("defi", expansions)
+        self.assertNotIn("выключатели", expansions)
+        applied_sources = {item["source"] for item in applied}
+        self.assertEqual(applied_sources, {"дефибриллятор"})
+
+    def test_sqlite_sentence_similarity_uses_semantic_graph_links(self) -> None:
+        self.service.conn.executemany(
+            """
+            INSERT OR REPLACE INTO token_frequency (token, first_char, token_length, frequency)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                ("дефибриллятор", "д", 13, 24),
+                ("defi", "d", 4, 3),
+            ],
+        )
+        self.service.conn.executemany(
+            """
+            INSERT OR REPLACE INTO semantic_neighbors (token, neighbor, score, cooccurrence)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                ("дефибриллятор", "defi", 0.18, 3),
+                ("defi", "дефибриллятор", 0.18, 3),
+            ],
+        )
+        self.service.conn.commit()
+
+        similarity = self.service.semantic_expander.sentence_similarity(
+            "наружный дефибриллятор",
+            "defi b",
+        )
+
+        self.assertGreater(similarity, 0.25)
+
+    def test_dense_retrieval_backfills_alias_only_candidate(self) -> None:
+        self.service.close()
+
+        conn = sqlite3.connect(self.search_db_path)
+        conn.row_factory = sqlite3.Row
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO semantic_neighbors (token, neighbor, score, cooccurrence)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                ("defi", "дефибриллятор", 0.24, 4),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        rebuild_dense_index(self.search_db_path)
+        self.service = SearchService(
+            search_db_path=self.search_db_path,
+            synonyms_path=self.synonyms_path,
+            semantic_backend="sqlite",
+        )
+
+        payload = self.service.search("дефибриллятор", top_k=5, min_score=0.0)
+
+        result_ids = [item["ste_id"] for item in payload["results"][:5]]
+        self.assertTrue(payload["query"]["dense_retrieval_enabled"])
+        self.assertIn("ste-7", result_ids)
+        alias_item = next(item for item in payload["results"] if item["ste_id"] == "ste-7")
+        self.assertGreater(alias_item["search_features"]["dense_vector_similarity"], 0.0)
+
+    def test_learned_dense_retrieval_backend_is_used_when_artifacts_exist(self) -> None:
+        self.service.close()
+        rebuild_learned_dense_artifacts(
+            self.search_db_path,
+            embedding_dim=16,
+            sample_size=32,
+            random_state=7,
+        )
+        self.service = SearchService(
+            search_db_path=self.search_db_path,
+            synonyms_path=self.synonyms_path,
+            semantic_backend="sqlite",
+        )
+
+        payload = self.service.search("дефибриллятор", top_k=5, min_score=0.0)
+
+        self.assertTrue(payload["query"]["dense_retrieval_enabled"])
+        self.assertEqual(payload["query"]["dense_retrieval_backend"], "learned")
+        result_ids = [item["ste_id"] for item in payload["results"][:5]]
+        self.assertIn("ste-7", result_ids)
+        learned_item = next(item for item in payload["results"] if item["ste_id"] == "ste-7")
+        self.assertGreater(learned_item["search_features"]["dense_vector_similarity"], 0.0)
 
 
 if __name__ == "__main__":

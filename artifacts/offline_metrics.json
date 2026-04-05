@@ -1,14 +1,152 @@
 {
-  "status": "missing_input",
-  "selected_query_variant": null,
-  "ranking_dataset": {},
-  "pseudo_query_benchmark": {},
-  "model_comparison": {},
+  "status": "partial",
+  "selected_query_variant": "contract_item_name",
+  "time_split": {
+    "train_end": "2023-12-28",
+    "val_end": "2025-02-09"
+  },
+  "ranking_dataset": {
+    "processed_positive_events": 2009457,
+    "emitted_positive_events": 60000,
+    "skipped_missing_catalog_match": 3824,
+    "skipped_empty_query": 0,
+    "rows_total": 2100000,
+    "groups_total": 300000,
+    "rows_by_split": {
+      "train": 2100000
+    }
+  },
+  "pseudo_query_benchmark": {
+    "contract_item_name": {
+      "groups": 0,
+      "ndcg@5": 0.0,
+      "ndcg@10": 0.0,
+      "mrr@10": 0.0,
+      "recall@10": 0.0,
+      "hitrate@10": 0.0
+    },
+    "contract_plus_category": {
+      "groups": 0,
+      "ndcg@5": 0.0,
+      "ndcg@10": 0.0,
+      "mrr@10": 0.0,
+      "recall@10": 0.0,
+      "hitrate@10": 0.0
+    },
+    "ste_name": {
+      "groups": 0,
+      "ndcg@5": 0.0,
+      "ndcg@10": 0.0,
+      "mrr@10": 0.0,
+      "recall@10": 0.0,
+      "hitrate@10": 0.0
+    },
+    "ste_name_category_attributes": {
+      "groups": 0,
+      "ndcg@5": 0.0,
+      "ndcg@10": 0.0,
+      "mrr@10": 0.0,
+      "recall@10": 0.0,
+      "hitrate@10": 0.0
+    },
+    "ste_name_plus_category": {
+      "groups": 0,
+      "ndcg@5": 0.0,
+      "ndcg@10": 0.0,
+      "mrr@10": 0.0,
+      "recall@10": 0.0,
+      "hitrate@10": 0.0
+    }
+  },
+  "model_comparison": {
+    "baseline_non_personalized": {
+      "overall": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      },
+      "new_users": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      },
+      "active_users": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      },
+      "frequent_categories": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      },
+      "rare_categories": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      }
+    },
+    "baseline_rule_based": {
+      "overall": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      },
+      "new_users": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      },
+      "active_users": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      },
+      "frequent_categories": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      },
+      "rare_categories": {
+        "groups": 0,
+        "ndcg@5": 0.0,
+        "ndcg@10": 0.0,
+        "mrr@10": 0.0,
+        "recall@10": 0.0,
+        "hitrate@10": 0.0
+      }
+    }
+  },
   "global_feature_importance": [],
   "per_object_contributions": [],
   "notes": [
-    "В репозитории отсутствуют оба обязательных входных датасета либо один из них.",
-    "Pipeline сгенерировал только статические артефакты и data contract.",
-    "Для реального обучения требуется положить каталог СТЕ и контракты в ожидаемые пути."
+    "CatBoost недоступен в текущем окружении: ModuleNotFoundError: No module named 'catboost'"
   ]
 }

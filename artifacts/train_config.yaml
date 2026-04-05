@@ -2,7 +2,9 @@
   "seed": 42,
   "paths": {
     "artifacts_dir": "artifacts",
-    "reports_dir": "reports"
+    "reports_dir": "reports",
+    "ste_catalog_path": null,
+    "contracts_path": null
   },
   "ranking_dataset": {
     "query_variants": [

@@ -4,9 +4,9 @@ import math
 import re
 import sqlite3
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Tuple
 
-from .text import normalize_text, normalize_tokens, unique_preserve_order
+from .text import normalize_text, normalize_tokens, stem_token, tokenize, unique_preserve_order
 
 
 DEFAULT_FASTTEXT_MODEL_PATH = Path("data/processed/tenderhack_fasttext.bin")
@@ -20,6 +20,27 @@ except ImportError:
 ALPHA_TOKEN_RE = re.compile(r"^[A-Za-zА-Яа-яЁё]+$")
 CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
 LATIN_RE = re.compile(r"[A-Za-z]")
+VOWEL_RE = re.compile(r"[аеёиоуыэюяaeiou]")
+ADJECTIVE_LIKE_ENDINGS = (
+    "ический",
+    "ическая",
+    "ическое",
+    "ические",
+    "ический",
+    "овый",
+    "овая",
+    "овое",
+    "овые",
+    "ий",
+    "ый",
+    "ой",
+    "ая",
+    "яя",
+    "ое",
+    "ее",
+    "ые",
+    "ие",
+)
 
 
 def _load_fasttext_model_silently(model_path: Path) -> object | None:
@@ -85,7 +106,24 @@ class SqliteSemanticBackend:
         self.conn = conn
         self.top_n = top_n
         self._cache: Dict[str, List[sqlite3.Row]] = {}
+        self._edge_cache: Dict[Tuple[str, str], float] = {}
+        self._frequency_cache: Dict[str, int] = {}
+        self._sentence_cache: Dict[Tuple[str, str], float] = {}
+        self._pair_similarity_cache: Dict[Tuple[str, str], float] = {}
+        self._row_count = self._load_row_count()
         self.enabled = self._has_assets()
+
+    def _load_row_count(self) -> int:
+        metadata_row = self.conn.execute(
+            "SELECT value FROM search_metadata WHERE key = 'deduped_rows' LIMIT 1"
+        ).fetchone()
+        if metadata_row is not None:
+            try:
+                return max(1, int(metadata_row[0]))
+            except (TypeError, ValueError):
+                pass
+        table_row = self.conn.execute("SELECT COUNT(*) FROM ste_catalog").fetchone()
+        return max(1, int(table_row[0] if table_row is not None else 1))
 
     def _has_assets(self) -> bool:
         row = self.conn.execute(
@@ -97,6 +135,130 @@ class SqliteSemanticBackend:
             """
         ).fetchone()
         return row is not None
+
+    @staticmethod
+    def _looks_like_abbreviation(token: str) -> bool:
+        if len(token) > 5 or not token.isalpha():
+            return False
+        vowel_count = len(VOWEL_RE.findall(token))
+        return vowel_count <= 1
+
+    @staticmethod
+    def _is_adjective_like(token: str) -> bool:
+        return any(token.endswith(ending) for ending in ADJECTIVE_LIKE_ENDINGS)
+
+    def _token_frequency(self, token: str) -> int:
+        cached = self._frequency_cache.get(token)
+        if cached is not None:
+            return cached
+        row = self.conn.execute(
+            "SELECT frequency FROM token_frequency WHERE token = ? LIMIT 1",
+            (token,),
+        ).fetchone()
+        frequency = int(row[0]) if row is not None else 0
+        self._frequency_cache[token] = frequency
+        return frequency
+
+    def _idf(self, token: str) -> float:
+        frequency = self._token_frequency(token)
+        return 1.0 + math.log1p(self._row_count / max(1, frequency))
+
+    def _edge_score(self, token: str, neighbor: str) -> float:
+        key = (token, neighbor)
+        cached = self._edge_cache.get(key)
+        if cached is not None:
+            return cached
+        row = self.conn.execute(
+            """
+            SELECT score
+            FROM semantic_neighbors
+            WHERE token = ? AND neighbor = ?
+            LIMIT 1
+            """,
+            (token, neighbor),
+        ).fetchone()
+        score = float(row[0]) if row is not None else 0.0
+        self._edge_cache[key] = score
+        return score
+
+    def _source_is_informative(self, token: str) -> bool:
+        frequency = self._token_frequency(token)
+        if frequency <= 0:
+            return False
+        if self._looks_like_abbreviation(token):
+            return True
+        if frequency >= 15_000:
+            return False
+        if frequency >= 2_000 and self._is_adjective_like(token):
+            return False
+        return True
+
+    def _source_priority(self, token: str) -> float:
+        priority = self._idf(token)
+        if self._looks_like_abbreviation(token):
+            priority += 1.5
+        if self._is_adjective_like(token):
+            priority -= 0.75
+        if len(token) <= 4 and not token.isdigit():
+            priority += 0.15
+        return priority
+
+    def _select_source_tokens(self, tokens: List[str]) -> List[str]:
+        informative_tokens = [token for token in tokens if self._source_is_informative(token)]
+        if len(informative_tokens) <= 1:
+            return informative_tokens
+        abbreviation_tokens = [token for token in informative_tokens if self._looks_like_abbreviation(token)]
+        if abbreviation_tokens:
+            informative_tokens = abbreviation_tokens
+
+        ranked_tokens = sorted(
+            informative_tokens,
+            key=lambda token: (self._source_priority(token), self._idf(token), -self._token_frequency(token), token),
+            reverse=True,
+        )
+        best_priority = self._source_priority(ranked_tokens[0])
+        max_sources = 1 if len(tokens) <= 2 else 2
+        selected = [
+            token
+            for token in ranked_tokens
+            if self._source_priority(token) >= best_priority - 0.45
+        ]
+        return selected[:max_sources]
+
+    def _target_is_allowed(
+        self,
+        source_token: str,
+        neighbor_token: str,
+        score: float,
+        cooccurrence: int,
+    ) -> bool:
+        if not neighbor_token or neighbor_token == source_token:
+            return False
+
+        source_frequency = self._token_frequency(source_token)
+        neighbor_frequency = self._token_frequency(neighbor_token)
+        if neighbor_frequency <= 0:
+            return False
+        if neighbor_frequency >= 20_000 and not self._looks_like_abbreviation(neighbor_token):
+            return False
+
+        stem_match = stem_token(source_token) == stem_token(neighbor_token)
+        surface_similarity = ngram_jaccard(source_token, neighbor_token)
+        reverse_score = self._edge_score(neighbor_token, source_token)
+
+        if stem_match:
+            return True
+        if surface_similarity >= 0.82:
+            return True
+        if reverse_score == 0.0 and score < 0.35:
+            return False
+        if reverse_score == 0.0 and neighbor_frequency > max(2_500, source_frequency * 1.4):
+            return False
+        if cooccurrence < 2 and score < 0.16:
+            return False
+        if score < 0.08:
+            return False
+        return True
 
     def _neighbors(self, token: str) -> List[sqlite3.Row]:
         if not self.enabled:
@@ -112,7 +274,7 @@ class SqliteSemanticBackend:
             ORDER BY score DESC, cooccurrence DESC, neighbor
             LIMIT ?
             """,
-            (token, self.top_n),
+            (token, max(self.top_n * 8, 24)),
         ).fetchall()
         self._cache[token] = rows
         return rows
@@ -121,11 +283,18 @@ class SqliteSemanticBackend:
         normalized = normalize_tokens(tokens)
         expansions: List[str] = []
         applied: List[Dict[str, object]] = []
-        for token in normalized:
+        for token in self._select_source_tokens(normalized):
             rows = self._neighbors(token)
             if not rows:
                 continue
-            targets = [row["neighbor"] for row in rows if row["neighbor"]]
+            targets: List[str] = []
+            for row in rows:
+                neighbor = str(row["neighbor"] or "")
+                if not self._target_is_allowed(token, neighbor, float(row["score"]), int(row["cooccurrence"])):
+                    continue
+                targets.append(neighbor)
+                if len(unique_preserve_order(targets)) >= self.top_n:
+                    break
             if not targets:
                 continue
             normalized_targets = unique_preserve_order(normalize_tokens(targets))
@@ -141,12 +310,70 @@ class SqliteSemanticBackend:
             )
         return unique_preserve_order(expansions), applied
 
+    def _token_pair_similarity(self, left_token: str, right_token: str) -> float:
+        if not left_token or not right_token:
+            return 0.0
+        key = (left_token, right_token)
+        cached = self._pair_similarity_cache.get(key)
+        if cached is not None:
+            return cached
+
+        if stem_token(left_token) == stem_token(right_token):
+            score = 1.0
+        else:
+            surface_similarity = ngram_jaccard(left_token, right_token)
+            semantic_edge = max(
+                self._edge_score(left_token, right_token),
+                self._edge_score(right_token, left_token),
+            )
+            score = 0.0
+            if surface_similarity >= 0.82:
+                score = max(score, min(0.96, 0.55 + 0.45 * surface_similarity))
+            if semantic_edge > 0.0:
+                score = max(score, min(0.88, 0.22 + 1.8 * semantic_edge))
+        self._pair_similarity_cache[key] = score
+        return score
+
+    def _soft_directional_overlap(self, left_tokens: List[str], right_tokens: List[str]) -> float:
+        if not left_tokens or not right_tokens:
+            return 0.0
+        weighted_total = 0.0
+        weighted_hits = 0.0
+        for token in left_tokens:
+            weight = self._idf(token)
+            best_similarity = 0.0
+            for candidate in right_tokens:
+                best_similarity = max(best_similarity, self._token_pair_similarity(token, candidate))
+                if best_similarity >= 1.0:
+                    break
+            weighted_total += weight
+            weighted_hits += weight * best_similarity
+        if weighted_total == 0.0:
+            return 0.0
+        return weighted_hits / weighted_total
+
     def sentence_similarity(self, left_text: str, right_text: str) -> float:
         left = normalize_text(left_text)
         right = normalize_text(right_text)
         if not left or not right:
             return 0.0
-        return max(ngram_jaccard(left, right), token_jaccard(left, right))
+        cache_key = (left, right)
+        cached = self._sentence_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        left_tokens = normalize_tokens(tokenize(left))
+        right_tokens = normalize_tokens(tokenize(right))
+        token_overlap = token_jaccard(left, right)
+        char_overlap = ngram_jaccard(left, right)
+        directional_overlap = (
+            self._soft_directional_overlap(left_tokens, right_tokens)
+            + self._soft_directional_overlap(right_tokens, left_tokens)
+        ) / 2.0
+        similarity = max(token_overlap, char_overlap * 0.75, directional_overlap)
+        self._sentence_cache[cache_key] = similarity
+        self._sentence_cache[(right, left)] = similarity
+        return similarity
 
 
 class FastTextSemanticBackend:

@@ -1,0 +1,13 @@
+from __future__ import annotations
+
+
+LOGIN_CACHE_VERSION = 6
+SEARCH_CACHE_VERSION = 9
+SUGGESTIONS_CACHE_VERSION = 16
+
+
+__all__ = [
+    "LOGIN_CACHE_VERSION",
+    "SEARCH_CACHE_VERSION",
+    "SUGGESTIONS_CACHE_VERSION",
+]
