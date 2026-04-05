@@ -1,0 +1,525 @@
+{
+  "search_component_benchmark": {
+    "passed": 8,
+    "total": 8,
+    "scenarios": [
+      {
+        "id": "exact_match",
+        "passed": true
+      },
+      {
+        "id": "typo_correction",
+        "passed": true
+      },
+      {
+        "id": "synonym_expansion",
+        "passed": true
+      },
+      {
+        "id": "wordform_handling",
+        "passed": true
+      },
+      {
+        "id": "semantic_acronym",
+        "passed": true
+      },
+      {
+        "id": "completion_prefix",
+        "passed": true
+      },
+      {
+        "id": "phrase_synonym_guard",
+        "passed": true
+      },
+      {
+        "id": "typo_token_leak_guard",
+        "passed": true
+      }
+    ]
+  },
+  "attribute_control_scenarios": {
+    "passed": 2,
+    "total": 2,
+    "scenarios": [
+      {
+        "id": "dosage_match_vs_mismatch",
+        "passed": true,
+        "top_1": "ste-3",
+        "correct_attribute_score": 5.0,
+        "wrong_attribute_score": -3.0
+      },
+      {
+        "id": "capacity_match_vs_mismatch",
+        "passed": true,
+        "top_1": "ste-2",
+        "correct_attribute_score": 5.0,
+        "wrong_attribute_score": -3.0
+      }
+    ]
+  },
+  "behavioral_control_scenarios": {
+    "cart_boost": {
+      "passed": true,
+      "multiplier_after_1_add": 1.094818,
+      "top_order": [
+        "A",
+        "B"
+      ]
+    },
+    "skip_penalty": {
+      "passed": true,
+      "laptops_multiplier_after_3_skips": 0.6,
+      "top_order": [
+        "Smartphones",
+        "Laptops"
+      ]
+    },
+    "historical_personalization": {
+      "passed": 2,
+      "total": 2,
+      "scenarios": [
+        {
+          "id": "promotes_relevant_history",
+          "passed": true,
+          "top_1": "ste-1",
+          "top_reason_codes": [
+            "USER_CATEGORY_AFFINITY",
+            "USER_REPEAT_BUY",
+            "PRICE_IN_RANGE"
+          ]
+        },
+        {
+          "id": "does_not_override_stronger_query_match",
+          "passed": true,
+          "top_1": "ste-2",
+          "query_match_quality": 1.0
+        }
+      ]
+    }
+  },
+  "cart_boost_unit_suite": {
+    "passed": 26,
+    "total": 26
+  },
+  "skip_penalty_unit_suite": {
+    "passed": 2,
+    "total": 2
+  },
+  "rerank_holdout_metrics": {
+    "dataset_path": "data\\processed\\rerank_train_current.csv",
+    "model_path": "data\\processed\\tenderhack_yeti_ranker_current_pairwise.cbm",
+    "metadata_path": "data\\processed\\tenderhack_yeti_ranker_current_pairwise.json",
+    "model_type": "catboost",
+    "feature_names": [
+      "candidate_rank",
+      "candidate_reciprocal_rank",
+      "search_score",
+      "attribute_count",
+      "query_token_count",
+      "query_has_digits",
+      "query_changed_by_correction",
+      "applied_correction_count",
+      "applied_synonym_count",
+      "applied_semantic_count",
+      "expanded_token_count",
+      "semantic_backend_sqlite",
+      "semantic_backend_fasttext",
+      "candidate_name_token_count",
+      "candidate_category_token_count",
+      "candidate_key_token_count",
+      "candidate_name_char_count",
+      "candidate_category_char_count",
+      "query_name_jaccard",
+      "query_category_jaccard",
+      "exact_phrase",
+      "full_name_cover",
+      "full_category_cover",
+      "corrected_token_overlap",
+      "name_stem_overlap",
+      "category_stem_overlap",
+      "key_token_overlap",
+      "semantic_name_overlap",
+      "semantic_category_overlap",
+      "semantic_key_overlap",
+      "semantic_vector_similarity",
+      "synonym_bonus",
+      "bm25_component"
+    ],
+    "split": {
+      "seed": 42,
+      "valid_fraction": 0.2,
+      "test_fraction": 0.1,
+      "train_groups": 388,
+      "valid_groups": 110,
+      "test_groups": 55
+    },
+    "valid": {
+      "baseline": {
+        "groups": 110,
+        "ndcg@5": 0.50545,
+        "ndcg@10": 0.540024,
+        "mrr@10": 0.491299,
+        "recall@10": 0.7,
+        "hitrate@10": 0.7
+      },
+      "ml": {
+        "groups": 110,
+        "ndcg@5": 0.647039,
+        "ndcg@10": 0.676899,
+        "mrr@10": 0.626973,
+        "recall@10": 0.836364,
+        "hitrate@10": 0.836364
+      },
+      "rank_summary": {
+        "groups": 110,
+        "avg_baseline_positive_rank": 10.227273,
+        "avg_ml_positive_rank": 6.454545,
+        "median_baseline_positive_rank": 3.0,
+        "median_ml_positive_rank": 1.0,
+        "improved_groups": 42,
+        "worsened_groups": 15,
+        "unchanged_groups": 53,
+        "top_improvements": [
+          {
+            "group_id": "group-1555",
+            "query": "кипятильник",
+            "positive_name": "Кипятильник",
+            "baseline_rank": 48,
+            "ml_rank": 5,
+            "delta": 43
+          },
+          {
+            "group_id": "group-307",
+            "query": "возмездного исследование почвы",
+            "positive_name": "Исследования почвы песка",
+            "baseline_rank": 43,
+            "ml_rank": 3,
+            "delta": 40
+          },
+          {
+            "group_id": "group-1999",
+            "query": "на мониторы",
+            "positive_name": "Монитор AOC B2 27B2AM 27",
+            "baseline_rank": 42,
+            "ml_rank": 4,
+            "delta": 38
+          },
+          {
+            "group_id": "group-215",
+            "query": "в соответствии с контрактом поставщик обязуется в порядке и сроки предусмотренные контрактом осуществить поставку лекарственного препарата для медицинского применения даратумумаб дарзалекс окпд 2 21 20 10 211 в соответствии со спецификацией приложение 1 к контракту далее по тексту спецификация а заказчик обязуется в порядке и сроки предусмотренные контрактом принять и оплатить поставленный товар",
+            "positive_name": "Дарзалекс конц. д/р-ра д/инф. 20 мг/мл 20 мл фл N 1x1 Силаг АГ Швейцария",
+            "baseline_rank": 42,
+            "ml_rank": 6,
+            "delta": 36
+          },
+          {
+            "group_id": "group-111",
+            "query": "бензин аи 92",
+            "positive_name": "Бензин автомобильный Комплекс Ойл АИ-92 К5",
+            "baseline_rank": 42,
+            "ml_rank": 7,
+            "delta": 35
+          },
+          {
+            "group_id": "group-119",
+            "query": "бензин аи 92",
+            "positive_name": "Бензин автомобильный Комплекс Ойл АИ-92 К5",
+            "baseline_rank": 42,
+            "ml_rank": 7,
+            "delta": 35
+          },
+          {
+            "group_id": "group-121",
+            "query": "бензин аи 92",
+            "positive_name": "Бензин автомобильный Комплекс Ойл АИ-92 К5",
+            "baseline_rank": 42,
+            "ml_rank": 7,
+            "delta": 35
+          },
+          {
+            "group_id": "group-2005",
+            "query": "на электрической плиты пылесосов бесперебойник на пк самоспасателей холодильного шкафа",
+            "positive_name": "Плита электрическая ПЭ49П",
+            "baseline_rank": 39,
+            "ml_rank": 10,
+            "delta": 29
+          },
+          {
+            "group_id": "group-2186",
+            "query": "на поставку продукции сметана творог яйцо столовое йогурт",
+            "positive_name": "Яйцо куриное \"Дивеевское",
+            "baseline_rank": 44,
+            "ml_rank": 19,
+            "delta": 25
+          },
+          {
+            "group_id": "group-1843",
+            "query": "лабораторные исследования",
+            "positive_name": "Лабораторные исследования",
+            "baseline_rank": 24,
+            "ml_rank": 1,
+            "delta": 23
+          }
+        ],
+        "top_regressions": [
+          {
+            "group_id": "group-2451",
+            "query": "по обработке фискальных данных и использованию программы",
+            "positive_name": "Услуги по обработке фискальных данных по тарифному плану «ОФД-13» сроком на 13 месяцев, 1 ККТ",
+            "baseline_rank": 17,
+            "ml_rank": 47,
+            "delta": -30
+          },
+          {
+            "group_id": "group-2640",
+            "query": "экспертиза санитарно эпидемиологическая соответствия условий с источниками ионизирующего излучения",
+            "positive_name": "Санитарно-эпидемиологическая экспертиза зданий, строений, сооружений, помещений, оборудования, и иного имущества, которые предполагается использовать для осуществления деятельности с использованием источников ионизирующих излучений. Рентгенодиагностический объект, 1 источник (без проведения лабораторно-инструментальных исследований)",
+            "baseline_rank": 24,
+            "ml_rank": 41,
+            "delta": -17
+          },
+          {
+            "group_id": "group-2808",
+            "query": "пластилин",
+            "positive_name": "Пластилин \"Классика\" 12 цв. со стеком",
+            "baseline_rank": 9,
+            "ml_rank": 24,
+            "delta": -15
+          },
+          {
+            "group_id": "group-158",
+            "query": "бумага а4 для офисной техники svetocopy марка c 500 листов",
+            "positive_name": "Бумага для офисной техники SvetoCopy Classic А3, марка C, 80 г/кв.м, 500 листов",
+            "baseline_rank": 36,
+            "ml_rank": 50,
+            "delta": -14
+          },
+          {
+            "group_id": "group-2639",
+            "query": "оказание услуг частной охраны выставление поста охраны",
+            "positive_name": "Услуги частной охраны(выставление поста охраны)",
+            "baseline_rank": 8,
+            "ml_rank": 22,
+            "delta": -14
+          },
+          {
+            "group_id": "group-888",
+            "query": "йогексол раствор для инъекций 350мг йода мл 100мл 1шт",
+            "positive_name": "Йогексол-АКОС р-р д/инъек. 350 мг йода/мл 100 мл фл №1х1 Открытое акционерное общество \"Акционерное Курганское общество медицинских препаратов и изделий \"Синтез\" Россия",
+            "baseline_rank": 18,
+            "ml_rank": 31,
+            "delta": -13
+          },
+          {
+            "group_id": "group-2497",
+            "query": "по предоставлению права использования программы для эвм контур экстерн и по сопровождению технической поддержке",
+            "positive_name": "Услуги по сопровождению программы для ЭВМ \"Контур.Экстерн\" (техническая поддержка в виде абонентского обслуживания) по тарифному плану \"Бюджетник плюс\" на 1 год",
+            "baseline_rank": 11,
+            "ml_rank": 22,
+            "delta": -11
+          },
+          {
+            "group_id": "group-889",
+            "query": "йогексол раствор для инъекций 350мг йода мл 100мл",
+            "positive_name": "Йогексол-АКОС р-р д/инъек. 350 мг йода/мл 100 мл фл N 1x1 ПАО \"Синтез\" Россия",
+            "baseline_rank": 17,
+            "ml_rank": 24,
+            "delta": -7
+          },
+          {
+            "group_id": "group-108",
+            "query": "бензин автомобильный аи 95 экологического класса не ниже к5 розничная реализация",
+            "positive_name": "Бензин автомобильный Газпромнефть АИ-95 К5",
+            "baseline_rank": 15,
+            "ml_rank": 21,
+            "delta": -6
+          },
+          {
+            "group_id": "group-2863",
+            "query": "полис осаго автомобиля",
+            "positive_name": "Полис ОСАГО, Обязательное страхование",
+            "baseline_rank": 4,
+            "ml_rank": 7,
+            "delta": -3
+          }
+        ]
+      }
+    },
+    "test": {
+      "baseline": {
+        "groups": 55,
+        "ndcg@5": 0.535708,
+        "ndcg@10": 0.577048,
+        "mrr@10": 0.513499,
+        "recall@10": 0.781818,
+        "hitrate@10": 0.781818
+      },
+      "ml": {
+        "groups": 55,
+        "ndcg@5": 0.647554,
+        "ndcg@10": 0.683422,
+        "mrr@10": 0.636328,
+        "recall@10": 0.836364,
+        "hitrate@10": 0.836364
+      },
+      "rank_summary": {
+        "groups": 55,
+        "avg_baseline_positive_rank": 8.454545,
+        "avg_ml_positive_rank": 6.163636,
+        "median_baseline_positive_rank": 2,
+        "median_ml_positive_rank": 1,
+        "improved_groups": 25,
+        "worsened_groups": 8,
+        "unchanged_groups": 22,
+        "top_improvements": [
+          {
+            "group_id": "group-2726",
+            "query": "открытый конкурс в электронной форме на оказание услуг по медицинскому уходу в государственном бюджетном учреждении здравоохранения города москвы городская клиническая больница имени в в вересаева департамента здравоохранения города москвы в 2024 году",
+            "positive_name": "Оказание услуг по выполнению функций младшего медицинского персонала",
+            "baseline_rank": 48,
+            "ml_rank": 14,
+            "delta": 34
+          },
+          {
+            "group_id": "group-2421",
+            "query": "оказание услуг дезинсекции и дератизации",
+            "positive_name": "Оказание услуг по дератизации",
+            "baseline_rank": 35,
+            "ml_rank": 2,
+            "delta": 33
+          },
+          {
+            "group_id": "group-2448",
+            "query": "оказание услуг по дистанционному гигиеническому обучению",
+            "positive_name": "Оказание услуг по дистанционной программе обучения",
+            "baseline_rank": 35,
+            "ml_rank": 9,
+            "delta": 26
+          },
+          {
+            "group_id": "group-863",
+            "query": "иммуноро кедрион лиофилизат для приготовления раствора для внутримышечного введения 300 мкг 1500 ме 1",
+            "positive_name": "Иммуноро Кедрион лиоф.т д/приг.р-ра для в/м введ. 300 мкг 300 мкг фл./в компл. с р-лем: вода для инъекц. (амп.) 2 мл N1х1 Кедрион С.п.А. Италия",
+            "baseline_rank": 44,
+            "ml_rank": 19,
+            "delta": 25
+          },
+          {
+            "group_id": "group-2603",
+            "query": "по экстренному реагированию на срабатывание средств тревожной сигнализации на объекте здание административно бытового корпуса 34 огпс",
+            "positive_name": "Охрана объектов с помощью средств тревожной сигнализации",
+            "baseline_rank": 13,
+            "ml_rank": 2,
+            "delta": 11
+          },
+          {
+            "group_id": "group-2724",
+            "query": "осельтамивир",
+            "positive_name": "Осельтамивир Авексима капс. 75 мг уп конт яч N 10x1 Ирбитский химфармзавод ОАО Россия",
+            "baseline_rank": 16,
+            "ml_rank": 7,
+            "delta": 9
+          },
+          {
+            "group_id": "group-332",
+            "query": "гигиеническая аттестация и гигиеническое обучение",
+            "positive_name": "Гигиеническая аттестация и гигиеническое обучение",
+            "baseline_rank": 9,
+            "ml_rank": 1,
+            "delta": 8
+          },
+          {
+            "group_id": "group-636",
+            "query": "закупка проездных билетов без лимита поездок на 365",
+            "positive_name": "Проездной билет без лимита поездок на 365 дней",
+            "baseline_rank": 11,
+            "ml_rank": 3,
+            "delta": 8
+          },
+          {
+            "group_id": "group-2705",
+            "query": "омнипак р р д инъек 350 мг йода",
+            "positive_name": "Омнипак® р-р д/инъек. 350 мг йода/мл 200 мл фл N 10x1 ДжиИ Хэлскеа Ирландия Лимитед Ирландия",
+            "baseline_rank": 6,
+            "ml_rank": 1,
+            "delta": 5
+          },
+          {
+            "group_id": "group-856",
+            "query": "иммуноглобулин человека нормальный",
+            "positive_name": "Иммуноглобулин человека нормальный р-р д/инф. 100 мг/мл 50 мл фл. №1х1 ООО \"Далиомфарма\" Республика Беларусь",
+            "baseline_rank": 7,
+            "ml_rank": 3,
+            "delta": 4
+          }
+        ],
+        "top_regressions": [
+          {
+            "group_id": "group-2232",
+            "query": "на парогенератор",
+            "positive_name": "Парогенератор для хамама Hygromatik FlexLine FLE25-TSPA",
+            "baseline_rank": 7,
+            "ml_rank": 27,
+            "delta": -20
+          },
+          {
+            "group_id": "group-870",
+            "query": "интернет",
+            "positive_name": "Оказание услуг по предоставлению доступа к сети интернет",
+            "baseline_rank": 20,
+            "ml_rank": 36,
+            "delta": -16
+          },
+          {
+            "group_id": "group-2475",
+            "query": "оказание услуг по передаче неисключительных пользовательских лицензионных прав на использование и абонентское обслуживание программы для эвм контур экстерн",
+            "positive_name": "Услуги абонентского обслуживания программы для ЭВМ «Контур.Экстерн» по тарифному плану «Бюджетник плюс» на 1 год",
+            "baseline_rank": 31,
+            "ml_rank": 41,
+            "delta": -10
+          },
+          {
+            "group_id": "group-1993",
+            "query": "на охрану объектов с помощью тревожной сигнализации",
+            "positive_name": "Охрана объектов с помощью тревожной сигнализации",
+            "baseline_rank": 3,
+            "ml_rank": 7,
+            "delta": -4
+          },
+          {
+            "group_id": "group-171",
+            "query": "бумага для офисной техники svetocopy а4 марка c 80 г кв м 500 листов",
+            "positive_name": "Бумага для офисной техники SvetoCopy Classic А4, марка C, 80 г/кв.м, 500 листов",
+            "baseline_rank": 5,
+            "ml_rank": 8,
+            "delta": -3
+          },
+          {
+            "group_id": "group-2827",
+            "query": "подписка на журнал бюджет печатная версия электронная версия на журнал финконтроль электронная версия на 2026 год",
+            "positive_name": "Обеспечение периодическими изданиями журнала \"Бюджет\" + доступ к электронной версии + сетевое издание \"Финконтроль\" 2026",
+            "baseline_rank": 8,
+            "ml_rank": 11,
+            "delta": -3
+          },
+          {
+            "group_id": "group-285",
+            "query": "варгатеф нинтеданиб",
+            "positive_name": "Варгатеф капс. мягк. 100 мг бл N 10x6 Каталент Германия Эбербах ГмбХ/Берингер Ингельхайм Фарма ГмбХ и Ко.КГ Германия",
+            "baseline_rank": 2,
+            "ml_rank": 4,
+            "delta": -2
+          },
+          {
+            "group_id": "group-324",
+            "query": "гербициды",
+            "positive_name": "Средство от сорняков Гербицид Торнадо Экстра, 900 мл, Avgust",
+            "baseline_rank": 2,
+            "ml_rank": 4,
+            "delta": -2
+          }
+        ]
+      }
+    }
+  }
+}
